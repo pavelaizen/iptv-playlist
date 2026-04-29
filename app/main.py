@@ -225,8 +225,12 @@ def main() -> None:
     )
 
     while True:
+        cycle_started_at = time.monotonic()
         _run_cycle_with_extra_delays(extra_run_offsets_seconds)
-        time.sleep(interval_seconds)
+        elapsed = time.monotonic() - cycle_started_at
+        sleep_seconds = max(0.0, interval_seconds - elapsed)
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
 
 
 if __name__ == "__main__":
