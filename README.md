@@ -22,7 +22,7 @@ Emby should reference only the stable final path/URL (`playlist_emby_clean.m3u`)
 Serve only the published directory through a tiny static container while keeping URL path stable:
 
 ```bash
-docker compose up -d playlist-static
+docker compose -f docker-compose.playlist.yml up -d playlist-static
 ```
 
 Then point Emby to:
