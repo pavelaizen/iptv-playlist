@@ -15,6 +15,8 @@ By default, this writes to a temporary file first and then atomically renames it
 
 Emby should reference only the stable final path/URL (`playlist_emby_clean.m3u`), never the `.tmp` file.
 
+> Note: `published/playlist_emby_clean.m3u` is generated output and is intentionally not committed.
+
 ## Stable HTTP URL via lightweight static server
 
 Serve only the published directory through a tiny static container while keeping URL path stable:
