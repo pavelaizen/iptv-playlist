@@ -12,6 +12,7 @@ services:
       - ./healthcheck.py:/app/healthcheck.py:ro
     environment:
       RUN_INTERVAL_HOURS: ${RUN_INTERVAL_HOURS:-24}
+      EXTRA_RUN_DELAYS_MINUTES: ${EXTRA_RUN_DELAYS_MINUTES:-30,60,240}
 
       # I/O settings
       RAW_PLAYLIST_PATH: ${RAW_PLAYLIST_PATH:-/data/input/playlist.m3u}
