@@ -1,2 +1,7 @@
 published/*.tmp
 published/playlist_emby_clean.m3u
+__pycache__/
+*.py[cod]
+.pytest_cache/
+output/diagnostics/
+output/.playlist_sanitizer_state
