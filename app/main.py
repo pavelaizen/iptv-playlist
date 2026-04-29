@@ -154,6 +154,12 @@ async def run_full_check() -> CycleState | None:
     )
 
 
+
+
+async def run_once() -> bool:
+    """Backward-compatible single full check entrypoint used by tests."""
+    state = await run_full_check()
+    return state is not None
 async def run_recovery_check(state: CycleState) -> None:
     if not state.pending_offline_urls:
         LOG.info("recovery check skipped: no offline channels pending")
@@ -199,12 +205,12 @@ def _run_cycle_with_extra_delays(extra_run_offsets_seconds: list[float]) -> None
     if state is None:
         return
 
-    elapsed_since_cycle_start = 0.0
+    cycle_started_at = time.monotonic()
     for target_offset in extra_run_offsets_seconds:
+        elapsed_since_cycle_start = time.monotonic() - cycle_started_at
         sleep_seconds = max(0.0, target_offset - elapsed_since_cycle_start)
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
-            elapsed_since_cycle_start += sleep_seconds
 
         LOG.info(
             "starting extra recovery run offset_minutes=%.2f pending_offline=%d",
