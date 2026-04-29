@@ -1,12 +1,14 @@
 services:
   playlist-sanitizer:
-    image: python:3.12-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.playlist-sanitizer
     container_name: playlist-sanitizer
     working_dir: /app
     volumes:
-      - ./playlist_empby_raw.m3u:/data/input/playlist.m3u:ro
+      - ./playlist_emby_raw.m3u:/data/input/playlist.m3u:ro
       - ./output:/data/output:rw
-      - ./playlist_sanitizer.py:/app/playlist_sanitizer.py:ro
+      - ./app:/app/app:ro
       - ./healthcheck.py:/app/healthcheck.py:ro
     environment:
       RUN_INTERVAL_HOURS: ${RUN_INTERVAL_HOURS:-24}
@@ -27,14 +29,8 @@ services:
       # Emby settings
       EMBY_BASE_URL: ${EMBY_BASE_URL:-}
       EMBY_API_KEY: ${EMBY_API_KEY:-}
-      EMBY_LIBRARY_NAME: ${EMBY_LIBRARY_NAME:-}
-      EMBY_USER_ID: ${EMBY_USER_ID:-}
 
-    command: >
-      sh -c "apt-get update
-      && apt-get install -y --no-install-recommends ffmpeg
-      && rm -rf /var/lib/apt/lists/*
-      && python /app/playlist_sanitizer.py"
+    command: ["python", "-m", "app.main"]
     healthcheck:
       test: ["CMD", "python", "/app/healthcheck.py"]
       interval: 5m

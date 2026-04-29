@@ -30,3 +30,24 @@ Then point Emby to:
 - `http://<host>:8080/playlist_emby_clean.m3u`
 
 Keep this URL unchanged; updates happen in-place via atomic rename.
+
+
+## Sanitizer runtime
+
+For automated probing and guarded publishing, run:
+
+```bash
+docker compose up -d --build playlist-sanitizer
+```
+
+To run unit tests:
+
+```bash
+python -m pytest -q tests
+```
+
+This service now runs `python -m app.main`, which:
+- probes channels asynchronously
+- applies publish guard thresholds
+- writes diagnostics when guard fails
+- optionally refreshes Emby Live TV endpoints
