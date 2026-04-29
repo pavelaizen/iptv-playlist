@@ -1,0 +1,44 @@
+services:
+  playlist-sanitizer:
+    image: python:3.12-slim
+    container_name: playlist-sanitizer
+    working_dir: /app
+    volumes:
+      - ./playlist_empby_raw.m3u:/data/input/playlist.m3u:ro
+      - ./output:/data/output:rw
+      - ./playlist_sanitizer.py:/app/playlist_sanitizer.py:ro
+      - ./healthcheck.py:/app/healthcheck.py:ro
+    environment:
+      RUN_INTERVAL_HOURS: ${RUN_INTERVAL_HOURS:-24}
+
+      # I/O settings
+      RAW_PLAYLIST_PATH: ${RAW_PLAYLIST_PATH:-/data/input/playlist.m3u}
+      OUTPUT_DIR: ${OUTPUT_DIR:-/data/output}
+      OUTPUT_PLAYLIST_NAME: ${OUTPUT_PLAYLIST_NAME:-playlist_clean.m3u}
+      STATE_FILE: ${STATE_FILE:-/data/output/.playlist_sanitizer_state}
+
+      # Probe settings
+      PROBE_TIMEOUT_SECONDS: ${PROBE_TIMEOUT_SECONDS:-15}
+      PROBE_READ_INTERVAL_US: ${PROBE_READ_INTERVAL_US:-5000000}
+      PROBE_USER_AGENT: ${PROBE_USER_AGENT:-playlist-sanitizer/1.0}
+      PROBE_FFMPEG_LOGLEVEL: ${PROBE_FFMPEG_LOGLEVEL:-error}
+      PROBE_EXTRA_ARGS: ${PROBE_EXTRA_ARGS:-}
+
+      # Emby settings
+      EMBY_BASE_URL: ${EMBY_BASE_URL:-}
+      EMBY_API_KEY: ${EMBY_API_KEY:-}
+      EMBY_LIBRARY_NAME: ${EMBY_LIBRARY_NAME:-}
+      EMBY_USER_ID: ${EMBY_USER_ID:-}
+
+    command: >
+      sh -c "apt-get update
+      && apt-get install -y --no-install-recommends ffmpeg
+      && rm -rf /var/lib/apt/lists/*
+      && python /app/playlist_sanitizer.py"
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 5m
+      timeout: 15s
+      retries: 3
+      start_period: 2m
+    restart: unless-stopped
