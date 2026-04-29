@@ -6,4 +6,7 @@ RUN apt-get update \
 
 WORKDIR /app
 
+COPY app /app/app
+COPY healthcheck.py /app/healthcheck.py
+
 CMD ["python", "-m", "app.main"]
