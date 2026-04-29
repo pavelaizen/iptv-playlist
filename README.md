@@ -10,14 +10,14 @@ Use the publisher script so the Emby-facing playlist is always written atomicall
 
 By default, this writes to a temporary file first and then atomically renames it:
 
-- temp: `playlist_emby_clean.m3u.tmp`
-- final: `playlist_emby_clean.m3u`
+- temp: `published/playlist_emby_clean.m3u.tmp`
+- final: `published/playlist_emby_clean.m3u`
 
 Emby should reference only the stable final path/URL (`playlist_emby_clean.m3u`), never the `.tmp` file.
 
 ## Stable HTTP URL via lightweight static server
 
-Serve the playlist through a tiny static container while keeping URL path stable:
+Serve only the published directory through a tiny static container while keeping URL path stable:
 
 ```bash
 docker compose up -d playlist-static
