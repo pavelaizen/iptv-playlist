@@ -37,7 +37,6 @@ PREVIOUS_CLEAN_PLAYLIST_NAME = os.getenv("PREVIOUS_CLEAN_PLAYLIST_NAME", OUTPUT_
 STATE_FILE = Path(os.getenv("STATE_FILE", "/data/output/.playlist_sanitizer_state"))
 RUN_INTERVAL_HOURS = float(os.getenv("RUN_INTERVAL_HOURS", "24"))
 DIAGNOSTICS_DIR = Path(os.getenv("DIAGNOSTICS_DIR", str(OUTPUT_DIR / "diagnostics")))
-
 MIN_VALID_CHANNELS_ABSOLUTE = int(os.getenv("MIN_VALID_CHANNELS_ABSOLUTE", "1"))
 MIN_VALID_RATIO_OF_PREVIOUS = float(os.getenv("MIN_VALID_RATIO_OF_PREVIOUS", "0.7"))
 
