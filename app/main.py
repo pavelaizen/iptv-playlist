@@ -39,10 +39,36 @@ RUN_INTERVAL_HOURS = float(os.getenv("RUN_INTERVAL_HOURS", "24"))
 DIAGNOSTICS_DIR = Path(os.getenv("DIAGNOSTICS_DIR", str(OUTPUT_DIR / "diagnostics")))
 MIN_VALID_CHANNELS_ABSOLUTE = int(os.getenv("MIN_VALID_CHANNELS_ABSOLUTE", "1"))
 MIN_VALID_RATIO_OF_PREVIOUS = float(os.getenv("MIN_VALID_RATIO_OF_PREVIOUS", "0.7"))
+EXTRA_RUN_DELAYS_MINUTES_RAW = os.getenv("EXTRA_RUN_DELAYS_MINUTES", "30,60,240")
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def parse_extra_run_offsets_seconds(raw_value: str) -> list[float]:
+    """Parse comma-separated minute offsets into sorted unique second offsets."""
+    if not raw_value.strip():
+        return []
+
+    offsets: set[float] = set()
+    for chunk in raw_value.split(","):
+        value = chunk.strip()
+        if not value:
+            continue
+        try:
+            minutes = float(value)
+        except ValueError:
+            LOG.warning("ignored invalid EXTRA_RUN_DELAYS_MINUTES token: %r", value)
+            continue
+
+        if minutes <= 0:
+            LOG.warning("ignored non-positive EXTRA_RUN_DELAYS_MINUTES value: %s", value)
+            continue
+
+        offsets.add(minutes * 60.0)
+
+    return sorted(offsets)
 
 
 def parse_m3u(path: Path) -> list[tuple[list[str], str]]:
@@ -128,13 +154,36 @@ def _safe_run_once() -> None:
         LOG.exception("run_once failed")
 
 
-def main() -> None:
+def _run_cycle_with_extra_delays(extra_run_offsets_seconds: list[float]) -> None:
     _safe_run_once()
+
+    elapsed_since_cycle_start = 0.0
+    for target_offset in extra_run_offsets_seconds:
+        sleep_seconds = max(0.0, target_offset - elapsed_since_cycle_start)
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+            elapsed_since_cycle_start += sleep_seconds
+
+        LOG.info(
+            "starting extra recovery run offset_minutes=%.2f",
+            target_offset / 60.0,
+        )
+        _safe_run_once()
+
+
+def main() -> None:
     interval_seconds = max(60.0, RUN_INTERVAL_HOURS * 3600.0)
+    extra_run_offsets_seconds = parse_extra_run_offsets_seconds(EXTRA_RUN_DELAYS_MINUTES_RAW)
+
+    LOG.info(
+        "scheduler configured base_interval_hours=%.2f extra_run_offsets_minutes=%s",
+        RUN_INTERVAL_HOURS,
+        [round(offset / 60.0, 3) for offset in extra_run_offsets_seconds],
+    )
 
     while True:
+        _run_cycle_with_extra_delays(extra_run_offsets_seconds)
         time.sleep(interval_seconds)
-        _safe_run_once()
 
 
 if __name__ == "__main__":
