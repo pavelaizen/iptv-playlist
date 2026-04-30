@@ -86,12 +86,13 @@ def select_playlist_for_publish(
 
     candidate_valid_channels = count_valid_channels(candidate_content.splitlines())
     previous_content = previous_clean_path.read_text(encoding="utf-8") if previous_clean_path.exists() else ""
+    published_content = candidate_output_path.read_text(encoding="utf-8") if candidate_output_path.exists() else ""
     previous_valid_channels = count_valid_channels(previous_content.splitlines())
 
     required_minimum = _calculate_required_minimum(previous_valid_channels, config)
 
     if candidate_valid_channels >= required_minimum:
-        content_changed = not previous_clean_path.exists() or candidate_content != previous_content
+        content_changed = not candidate_output_path.exists() or candidate_content != published_content
         if content_changed:
             _atomic_write_text(candidate_output_path, candidate_content)
         return GuardDecision(

@@ -96,7 +96,18 @@ def _trigger_refresh_guide(
         ok, detail = _post_emby(config, endpoint, log)
         if ok:
             return True, f"scheduled-task {task_label or task_id}"
-        return False, f"scheduled-task {task_label or task_id}: {detail}"
+        log.warning(
+            "Emby refresh scheduled task %s failed: %s; trying legacy Live TV endpoint",
+            task_label or task_id,
+            detail,
+        )
+        legacy_ok, legacy_detail = _post_emby(config, "/LiveTv/RefreshGuide", log)
+        if legacy_ok:
+            return True, "legacy LiveTv/RefreshGuide"
+        return False, (
+            f"scheduled-task {task_label or task_id}: {detail}; "
+            f"legacy /LiveTv/RefreshGuide: {legacy_detail}"
+        )
 
     return _post_emby(config, "/LiveTv/RefreshGuide", log)
 
