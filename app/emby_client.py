@@ -11,7 +11,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 from urllib import error, parse, request
 
 _LOG = logging.getLogger(__name__)
@@ -59,12 +59,13 @@ def refresh_livetv_after_publish(logger: Optional[logging.Logger] = None) -> Opt
         )
         return None
 
-    endpoints = ["/LiveTv/RefreshGuide"]
-    if config.tuner_id:
-        endpoints.append(f"/LiveTv/Tuners/{parse.quote(config.tuner_id, safe='')}/Reset")
-
     failures: list[str] = []
-    for endpoint in endpoints:
+    ok, detail = _trigger_refresh_guide(config, log)
+    if not ok:
+        failures.append(f"refresh-guide: {detail}")
+
+    if config.tuner_id:
+        endpoint = f"/LiveTv/Tuners/{parse.quote(config.tuner_id, safe='')}/Reset"
         ok, detail = _post_emby(config, endpoint, log)
         if not ok:
             failures.append(f"{endpoint}: {detail}")
@@ -78,6 +79,51 @@ def refresh_livetv_after_publish(logger: Optional[logging.Logger] = None) -> Opt
         return warning
 
     return None
+
+
+def _trigger_refresh_guide(
+    config: EmbyConfig,
+    log: logging.Logger,
+) -> tuple[bool, str]:
+    """Run the Live TV guide refresh on the current Emby flavor.
+
+    Older/newer Emby builds expose this as a scheduled task rather than a
+    dedicated `/LiveTv/RefreshGuide` endpoint, so prefer task discovery first.
+    """
+    task_id, task_label = _find_refresh_guide_task(config, log)
+    if task_id is not None:
+        endpoint = f"/ScheduledTasks/Running/{parse.quote(task_id, safe='')}"
+        ok, detail = _post_emby(config, endpoint, log)
+        if ok:
+            return True, f"scheduled-task {task_label or task_id}"
+        return False, f"scheduled-task {task_label or task_id}: {detail}"
+
+    return _post_emby(config, "/LiveTv/RefreshGuide", log)
+
+
+def _find_refresh_guide_task(
+    config: EmbyConfig,
+    log: logging.Logger,
+) -> tuple[str | None, str | None]:
+    ok, payload = _get_emby_json(config, "/ScheduledTasks", log)
+    if not ok:
+        return None, None
+
+    if not isinstance(payload, list):
+        return None, None
+
+    for task in payload:
+        if not isinstance(task, dict):
+            continue
+        key = str(task.get("Key", "")).strip()
+        name = str(task.get("Name", "")).strip()
+        if key == "RefreshGuide" or name.lower() == "refresh guide":
+            task_id = str(task.get("Id", "")).strip() or None
+            if task_id is None:
+                continue
+            return task_id, name or key
+
+    return None, None
 
 
 def _post_emby(config: EmbyConfig, endpoint: str, log: logging.Logger) -> tuple[bool, str]:
@@ -110,3 +156,31 @@ def _post_emby(config: EmbyConfig, endpoint: str, log: logging.Logger) -> tuple[
     except Exception as exc:  # noqa: BLE001 - non-fatal by design.
         log.warning("Emby refresh POST %s failed: %s", endpoint, exc)
         return False, str(exc)
+
+
+def _get_emby_json(
+    config: EmbyConfig,
+    endpoint: str,
+    log: logging.Logger,
+) -> tuple[bool, Any]:
+    url = f"{config.base_url}{endpoint}"
+    req = request.Request(
+        url=url,
+        method="GET",
+        headers={
+            "X-Emby-Token": config.api_key,
+            "Accept": "application/json",
+        },
+    )
+
+    try:
+        with request.urlopen(req, timeout=20) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            status = getattr(resp, "status", None) or resp.getcode()
+            log.info("Emby refresh GET %s -> HTTP %s", endpoint, status)
+            if not (200 <= status < 300):
+                return False, None
+            return True, json.loads(body)
+    except Exception as exc:  # noqa: BLE001 - non-fatal by design.
+        log.warning("Emby refresh GET %s failed: %s", endpoint, exc)
+        return False, None

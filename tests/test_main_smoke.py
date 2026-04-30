@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import asyncio
+from datetime import datetime, timezone
 
 from app import main as app_main
 
@@ -41,3 +42,102 @@ def test_run_once_smoke(monkeypatch, tmp_path: Path):
     assert "http://ok" in output
     assert "http://bad" not in output
     assert state_file.exists()
+
+
+def test_build_candidate_playlist_does_not_duplicate_m3u_header(tmp_path: Path):
+    raw = tmp_path / "raw.m3u"
+    raw.write_text(
+        "#EXTM3U\n#EXTINF:-1,Chan1\nhttp://ok\n",
+        encoding="utf-8",
+    )
+
+    entries = app_main.parse_m3u(raw)
+    output = app_main.build_candidate_playlist(entries, {"http://ok"})
+
+    assert output.count("#EXTM3U") == 1
+
+
+def test_publish_candidate_does_not_update_state_when_guard_rejects(monkeypatch, tmp_path: Path):
+    out_dir = tmp_path / "out"
+    state_file = out_dir / ".state"
+
+    monkeypatch.setattr(app_main, "OUTPUT_DIR", out_dir)
+    monkeypatch.setattr(app_main, "OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u")
+    monkeypatch.setattr(app_main, "PREVIOUS_CLEAN_PLAYLIST_NAME", "playlist_clean.m3u")
+    monkeypatch.setattr(app_main, "STATE_FILE", state_file)
+    monkeypatch.setattr(app_main, "DIAGNOSTICS_DIR", out_dir / "diag")
+    monkeypatch.setattr(app_main, "MIN_VALID_CHANNELS_ABSOLUTE", 1)
+    monkeypatch.setattr(app_main, "MIN_VALID_RATIO_OF_PREVIOUS", 0.7)
+
+    published = app_main._publish_candidate("#EXTM3U\n")
+
+    assert published is False
+    assert not state_file.exists()
+
+
+def test_publish_candidate_skips_emby_refresh_when_content_unchanged(monkeypatch, tmp_path: Path):
+    out_dir = tmp_path / "out"
+    state_file = out_dir / ".state"
+    content = "#EXTM3U\n#EXTINF:-1,Chan1\nhttp://ok\n"
+    out_dir.mkdir()
+    (out_dir / "playlist_clean.m3u").write_text(content, encoding="utf-8")
+
+    refresh_calls: list[object] = []
+
+    monkeypatch.setattr(app_main, "OUTPUT_DIR", out_dir)
+    monkeypatch.setattr(app_main, "OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u")
+    monkeypatch.setattr(app_main, "PREVIOUS_CLEAN_PLAYLIST_NAME", "playlist_clean.m3u")
+    monkeypatch.setattr(app_main, "STATE_FILE", state_file)
+    monkeypatch.setattr(app_main, "DIAGNOSTICS_DIR", out_dir / "diag")
+    monkeypatch.setattr(app_main, "MIN_VALID_CHANNELS_ABSOLUTE", 1)
+    monkeypatch.setattr(app_main, "MIN_VALID_RATIO_OF_PREVIOUS", 0.7)
+    monkeypatch.setattr(app_main, "refresh_livetv_after_publish", lambda logger: refresh_calls.append(logger))
+
+    published = app_main._publish_candidate(content)
+
+    assert published is True
+    assert refresh_calls == []
+    assert state_file.exists()
+
+
+def test_build_probe_targets_creates_safe_metadata(tmp_path: Path):
+    raw = tmp_path / "raw.m3u"
+    raw.write_text(
+        "#EXTM3U\n#EXTINF:-1 tvg-id=\"c1\",Channel One\nhttp://example.invalid/stream?token=secret\n",
+        encoding="utf-8",
+    )
+
+    entries = app_main.parse_m3u(raw)
+    targets = app_main.build_probe_targets(entries)
+
+    assert len(targets) == 1
+    assert targets[0].name == "Channel One"
+    assert len(targets[0].fingerprint) == 10
+    assert "http://" not in app_main.format_probe_target(targets[0])
+    assert "secret" not in app_main.format_probe_target(targets[0])
+
+
+def test_parse_full_check_time_accepts_hour_minute():
+    assert app_main.parse_full_check_time("03:00") == (3, 0)
+
+
+def test_seconds_until_next_full_check_time_rolls_to_tomorrow():
+    now = datetime(2026, 4, 30, 3, 1, tzinfo=timezone.utc)
+
+    assert app_main.seconds_until_next_full_check_time(now, (3, 0)) == 23 * 3600 + 59 * 60
+
+
+def test_should_run_immediately_on_start_requires_state_and_clean_playlist(monkeypatch, tmp_path: Path):
+    out_dir = tmp_path / "out"
+    state_file = out_dir / ".state"
+    monkeypatch.setattr(app_main, "OUTPUT_DIR", out_dir)
+    monkeypatch.setattr(app_main, "OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u")
+    monkeypatch.setattr(app_main, "STATE_FILE", state_file)
+
+    assert app_main.should_run_immediately_on_start() is True
+
+    out_dir.mkdir()
+    state_file.write_text("2026-04-30T00:00:00+00:00\n", encoding="utf-8")
+    (out_dir / "playlist_clean.m3u").write_text("#EXTM3U\n", encoding="utf-8")
+
+    assert app_main.should_run_immediately_on_start() is False

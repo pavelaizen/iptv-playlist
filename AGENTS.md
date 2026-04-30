@@ -24,7 +24,7 @@ Do not paste real playlist URL lines, provider hostnames, subscription tokens, o
 - `healthcheck.py` - container healthcheck. Fails when the sanitizer state file is missing, invalid, or older than twice `RUN_INTERVAL_HOURS` with a 1 hour minimum.
 - `publish_emby_playlist.sh` - simple atomic publisher for the raw Emby playlist. Normalizes CRLF and removes empty lines before moving a temp file into place.
 - `Dockerfile.playlist-sanitizer` - Python 3.12 slim image with `ffmpeg` installed for `ffprobe`.
-- `docker-compose.yml` - long-running sanitizer service.
+- `docker-compose.yml` - long-running sanitizer service. Writes the served clean playlist into `./published` and private state/diagnostics into `./output`.
 - `docker-compose.playlist.yml` - nginx static server for `./published` on port `8080`.
 - `tests/` - pytest coverage for smoke orchestration and publish guard behavior.
 - `.github/workflows/ci.yml` - compileall plus pytest on Python 3.12.
@@ -48,10 +48,10 @@ Important inconsistency to preserve unless the user asks to change it: `README.m
 2. Probe every URL with `probe_channels`.
 3. Build candidate M3U content containing only valid URLs.
 4. Publish through `select_playlist_for_publish`.
-5. If the candidate passes the guard, call `refresh_livetv_after_publish`.
-6. Write `STATE_FILE` with the current UTC ISO timestamp.
+5. If the candidate passes the guard and changes the clean playlist content, call `refresh_livetv_after_publish`; unchanged content skips Emby refresh.
+6. After a successful guarded publish, write `STATE_FILE` with the current UTC ISO timestamp.
 7. Run extra recovery checks at configured offsets. Recovery checks probe only previously offline URLs and republish only if some recover.
-8. Sleep until the next base interval anchored to cycle start.
+8. Sleep until the next configured full-check time.
 
 `run_once()` is a backwards-compatible test helper. It performs a single full check and returns whether a state object was produced.
 
@@ -65,14 +65,15 @@ Required minimum:
 max(MIN_VALID_CHANNELS_ABSOLUTE, int(previous_valid_channels * MIN_VALID_RATIO_OF_PREVIOUS))
 ```
 
-If the candidate count meets the minimum, the candidate content is written to `candidate_output_path`.
+If the candidate count meets the minimum, changed candidate content is atomically written to `candidate_output_path`; unchanged content skips the write.
 
 If it fails:
 
 - a diagnostic candidate file is written when `diagnostics_dir` is configured
-- previous clean content is copied to the candidate output path when a previous file exists
+- previous clean content is atomically copied to the candidate output path when a previous file exists
 - the decision returns `publish_candidate=False`
 - Emby refresh must not run
+- `STATE_FILE` must not be updated
 
 ## Environment Variables
 
@@ -84,7 +85,7 @@ Read by `app/main.py`:
 - `OUTPUT_PLAYLIST_NAME` default `playlist_clean.m3u`
 - `PREVIOUS_CLEAN_PLAYLIST_NAME` default same as `OUTPUT_PLAYLIST_NAME`
 - `STATE_FILE` default `/data/output/.playlist_sanitizer_state`
-- `RUN_INTERVAL_HOURS` default `24`, minimum scheduler sleep interval is 60 seconds
+- `FULL_CHECK_TIME` default `03:00`, local container time for the daily full playlist scan
 - `DIAGNOSTICS_DIR` default `OUTPUT_DIR / "diagnostics"`
 - `MIN_VALID_CHANNELS_ABSOLUTE` default `1`
 - `MIN_VALID_RATIO_OF_PREVIOUS` default `0.7`
@@ -114,7 +115,7 @@ Read by `publish_emby_playlist.sh`:
 - `PUBLISH_DIR` default `published`
 - `DEST_FILE_NAME` default `playlist_emby_clean.m3u`
 
-Note: `docker-compose.yml` currently exposes `PROBE_READ_INTERVAL_US`, `PROBE_USER_AGENT`, `PROBE_FFMPEG_LOGLEVEL`, and `PROBE_EXTRA_ARGS`, but the Python code does not currently read them.
+Compose note: `docker-compose.yml` maps `./published` to `/data/output` so the sanitizer updates the same `playlist_emby_clean.m3u` file served by nginx. It maps `./output` to `/data/state` for healthcheck state and diagnostics, keeping diagnostics out of the public static directory.
 
 ## Common Commands
 
