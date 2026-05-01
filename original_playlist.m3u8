@@ -32,9 +32,6 @@ http://eqak8jqn.megogo.xyz/iptv/6Y7364TTNQMHM5/4000/index.m3u8
 #EXTINF:0 tvg-rec="3",Love Nature 4K
 #EXTGRP:4K
 http://eqak8jqn.megogo.xyz/iptv/6Y7364TTNQMHM5/5001/index.m3u8
-#EXTINF:0 tvg-rec="3",Кино UHD
-#EXTGRP:4K
-http://eqak8jqn.megogo.xyz/iptv/6Y7364TTNQMHM5/5004/index.m3u8
 #EXTINF:0 tvg-rec="0",Первый канал HD orig
 #EXTGRP:HD Orig
 http://eqak8jqn.megogo.xyz/iptv/6Y7364TTNQMHM5/7253/index.m3u8

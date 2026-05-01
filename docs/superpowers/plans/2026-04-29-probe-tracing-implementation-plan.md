@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add safe per-channel probe/retry/recovery tracing to the sanitizer runtime, then deploy the Docker service and verify it processes `playlist_emby_raw.m3u`.
+**Goal:** Add safe per-channel probe/retry/recovery tracing to the sanitizer runtime, then deploy the Docker service and verify it processes `original_playlist.m3u8`.
 
 **Architecture:** Keep the existing scheduler and publish flow, but enrich the probe pipeline with safe channel metadata so logs can identify channels without exposing raw IPTV URLs. Emit structured runtime events to container stdout and drive verification through pytest plus a live Docker run at `LOG_LEVEL=DEBUG`.
 

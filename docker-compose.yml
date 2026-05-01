@@ -6,7 +6,7 @@ services:
     container_name: playlist-sanitizer
     working_dir: /app
     volumes:
-      - ./playlist_emby_raw.m3u:/data/input/playlist.m3u:ro
+      - ./original_playlist.m3u8:/data/input/playlist.m3u:ro
       - ./published:/data/output:rw
       - ./output:/data/state:rw
       - ./app:/app/app:ro

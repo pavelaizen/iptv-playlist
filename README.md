@@ -56,7 +56,7 @@ The runtime emits cycle, retry, recovery, and publish events to container stdout
 
 For Synology Container Manager, create the project from this Compose file and keep these host paths mounted:
 
-- `./playlist_emby_raw.m3u` -> `/data/input/playlist.m3u` read-only
+- `./original_playlist.m3u8` -> `/data/input/playlist.m3u` read-only
 - `./published` -> `/data/output` read-write
 - `./output` -> `/data/state` read-write
 

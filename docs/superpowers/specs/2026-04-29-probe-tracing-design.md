@@ -1,6 +1,6 @@
 # Probe Tracing Design
 
-**Goal:** Add code-level probe and recovery tracing so the sanitizer can be debugged easily in Docker/Synology while processing `playlist_emby_raw.m3u`, without leaking raw provider URLs into logs.
+**Goal:** Add code-level probe and recovery tracing so the sanitizer can be debugged easily in Docker/Synology while processing `original_playlist.m3u8`, without leaking raw provider URLs into logs.
 
 ## Scope
 
@@ -8,7 +8,7 @@ This change covers:
 
 - structured runtime logging for full checks, per-channel probe attempts, retries, recovery runs, and publish decisions
 - safe channel identifiers derived from playlist metadata plus a short URL fingerprint
-- deployment validation with Docker against the existing `playlist_emby_raw.m3u` input
+- deployment validation with Docker against the existing `original_playlist.m3u8` input
 
 This change does not add a separate log file sink or external logging service.
 
@@ -68,7 +68,7 @@ This makes the existing recovery behavior observable rather than implicit.
 For the first live run:
 
 - build and start `playlist-sanitizer` with `LOG_LEVEL=DEBUG`
-- confirm the container reads `playlist_emby_raw.m3u`
+- confirm the container reads `original_playlist.m3u8`
 - inspect logs to verify probe attempts, failures, retries, recovery scheduling, and publish output
 - confirm the served clean playlist is updated only through the guard path
 

@@ -33,10 +33,10 @@ Do not paste real playlist URL lines, provider hostnames, subscription tokens, o
 
 - `playlist.m3u` - root playlist, currently CRLF encoded and using `#EXTGRP` metadata.
 - `playlist_smartone.m3u` - alternate playlist, currently CRLF encoded and using `group-title` metadata.
-- `playlist_emby_raw.m3u` - raw Emby input playlist mounted by `docker-compose.yml`.
+- `original_playlist.m3u8` - source-of-truth raw Emby input playlist mounted by `docker-compose.yml`.
 - `published/playlist_emby_clean.m3u` - Emby-facing clean playlist served by nginx.
 
-All four tracked playlists currently contain 1011 `#EXTINF` channel records. Treat these as data/subscription material, not examples to quote verbatim.
+Treat the playlist files as subscription material, not examples to quote verbatim. The source-of-truth raw playlist is `original_playlist.m3u8`.
 
 Important inconsistency to preserve unless the user asks to change it: `README.md` says `published/playlist_emby_clean.m3u` is generated output and intentionally not committed, but the file is currently tracked in git.
 
@@ -111,7 +111,7 @@ Read by `healthcheck.py`:
 
 Read by `publish_emby_playlist.sh`:
 
-- `SRC_FILE` default `playlist_emby_raw.m3u`
+- `SRC_FILE` default `original_playlist.m3u8`
 - `PUBLISH_DIR` default `published`
 - `DEST_FILE_NAME` default `playlist_emby_clean.m3u`
 
@@ -152,8 +152,13 @@ Publish raw Emby playlist atomically:
 Count channels without printing playlist URLs:
 
 ```bash
-rg -c "^#EXTINF" playlist.m3u playlist_emby_raw.m3u playlist_smartone.m3u published/playlist_emby_clean.m3u
+rg -c "^#EXTINF" playlist.m3u original_playlist.m3u8 playlist_smartone.m3u published/playlist_emby_clean.m3u
 ```
+
+## Repo-local Skills
+
+- `skills/updating-emby-playlist/SKILL.md` - use when the playlist is already published and the remaining work is to register or refresh the Emby Live TV source. This skill must not contain or reuse stored credentials; require current-session env vars or interactive auth.
+- `skills/deploying-to-synology/SKILL.md` - use when syncing this repo to the Synology NAS and restarting the playlist services there. This skill must not hardcode SSH targets, passwords, API keys, or remote paths; require current-session inputs.
 
 ## Development Notes
 
