@@ -43,8 +43,12 @@ class EpgWorkerSettings:
                 os.getenv("EPG_STATE_FILE", "/data/state/.epg_trimmer_state")
             ),
             work_dir=Path(os.getenv("EPG_WORK_DIR", "/data/state/epg")),
-            min_matched_channels=_env_int("EPG_MIN_MATCHED_CHANNELS", 1),
-            min_programmes=_env_int("EPG_MIN_PROGRAMMES", 1),
+            min_matched_channels=_env_int(
+                "EPG_MIN_MATCHED_CHANNELS",
+                1,
+                minimum=1,
+            ),
+            min_programmes=_env_int("EPG_MIN_PROGRAMMES", 1, minimum=1),
         )
 
 
@@ -185,7 +189,7 @@ def main() -> None:
 
     while True:
         sleep_seconds = seconds_until_next_run_time(
-            datetime.now(timezone.utc),
+            datetime.now().astimezone(),
             settings.run_time,
         )
         LOG.info("Sleeping %.0f seconds until next EPG run", sleep_seconds)
@@ -221,16 +225,28 @@ def _validate_gzip_stream(path: Path) -> None:
             pass
 
 
-def _env_int(name: str, default: int) -> int:
+def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
     raw_value = os.getenv(name)
     if raw_value is None:
         return default
 
     try:
-        return int(raw_value)
+        value = int(raw_value)
     except ValueError:
         LOG.warning("Invalid %s=%r; falling back to %s", name, raw_value, default)
         return default
+
+    if minimum is not None and value < minimum:
+        LOG.warning(
+            "Invalid %s=%r; minimum is %s, falling back to %s",
+            name,
+            raw_value,
+            minimum,
+            default,
+        )
+        return default
+
+    return value
 
 
 logging.basicConfig(

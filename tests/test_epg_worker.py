@@ -4,7 +4,7 @@ import gzip
 import io
 import shutil
 import zlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -63,6 +63,57 @@ def test_seconds_until_next_run_time_wraps_to_next_day():
 
 def test_should_run_immediately_when_output_missing(tmp_path: Path):
     assert epg_worker.should_run_immediately(tmp_path / "missing.xml.gz") is True
+
+
+def test_settings_from_env_rejects_negative_guard_values(monkeypatch):
+    monkeypatch.setenv("EPG_MIN_MATCHED_CHANNELS", "-1")
+    monkeypatch.setenv("EPG_MIN_PROGRAMMES", "-2")
+
+    settings = epg_worker.EpgWorkerSettings.from_env()
+
+    assert settings.min_matched_channels == 1
+    assert settings.min_programmes == 1
+
+
+def test_main_schedules_with_local_aware_time(tmp_path: Path, monkeypatch):
+    class StopScheduler(Exception):
+        pass
+
+    class LocalClock:
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return datetime(2026, 5, 1, 1, 0, tzinfo=tz)
+            return cls()
+
+        def astimezone(self):
+            return datetime(2026, 5, 1, 4, 0, tzinfo=timezone(timedelta(hours=3)))
+
+    captured = {}
+
+    monkeypatch.setattr(
+        epg_worker.EpgWorkerSettings,
+        "from_env",
+        classmethod(lambda cls: settings_for(tmp_path)),
+    )
+    monkeypatch.setattr(epg_worker, "should_run_immediately", lambda output_path: False)
+
+    def fake_seconds_until_next_run_time(now: datetime, run_time: tuple[int, int]):
+        captured["now"] = now
+        raise StopScheduler
+
+    monkeypatch.setattr(
+        epg_worker,
+        "seconds_until_next_run_time",
+        fake_seconds_until_next_run_time,
+    )
+    monkeypatch.setattr(epg_worker, "datetime", LocalClock)
+
+    with pytest.raises(StopScheduler):
+        epg_worker.main()
+
+    assert captured["now"].tzinfo is not None
+    assert captured["now"].tzinfo is not timezone.utc
 
 
 def test_download_epg_rejects_truncated_gzip_without_replacing_destination(
