@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import gzip
+import io
 import shutil
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 from app import epg, epg_worker
 
@@ -17,6 +21,21 @@ def write_gzip(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(path, "wt", encoding="utf-8") as fh:
         fh.write(text)
+
+
+def gzip_bytes(text: str) -> bytes:
+    buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=buffer, mode="wb") as fh:
+        fh.write(text.encode("utf-8"))
+    return buffer.getvalue()
+
+
+class _BytesResponse(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+        self.close()
 
 
 def settings_for(tmp_path: Path) -> epg_worker.EpgWorkerSettings:
@@ -44,6 +63,44 @@ def test_seconds_until_next_run_time_wraps_to_next_day():
 
 def test_should_run_immediately_when_output_missing(tmp_path: Path):
     assert epg_worker.should_run_immediately(tmp_path / "missing.xml.gz") is True
+
+
+def test_download_epg_rejects_truncated_gzip_without_replacing_destination(
+    tmp_path: Path,
+    monkeypatch,
+):
+    destination = tmp_path / "epg.xml.gz"
+    original_payload = "<tv><channel id='old'/></tv>"
+    write_gzip(destination, original_payload)
+    truncated_payload = gzip_bytes("<tv>" + ("x" * 4096) + "</tv>")[:-8]
+
+    def fake_urlopen(source_url: str, timeout: int):  # noqa: ARG001
+        assert timeout == 180
+        return _BytesResponse(truncated_payload)
+
+    monkeypatch.setattr(epg_worker.request, "urlopen", fake_urlopen)
+
+    with pytest.raises((EOFError, gzip.BadGzipFile, OSError, zlib.error)):
+        epg_worker.download_epg("http://example.invalid/epg.xml.gz", destination)
+
+    assert gzip_text(destination) == original_payload
+    assert list(tmp_path.glob(".epg.xml.gz.*.tmp")) == []
+
+
+def test_download_epg_writes_valid_gzip_payload(tmp_path: Path, monkeypatch):
+    destination = tmp_path / "epg.xml.gz"
+    payload = "<tv><channel id='new'/></tv>"
+
+    def fake_urlopen(source_url: str, timeout: int):  # noqa: ARG001
+        assert timeout == 180
+        return _BytesResponse(gzip_bytes(payload))
+
+    monkeypatch.setattr(epg_worker.request, "urlopen", fake_urlopen)
+
+    epg_worker.download_epg("http://example.invalid/epg.xml.gz", destination)
+
+    assert gzip_text(destination) == payload
+    assert list(tmp_path.glob(".epg.xml.gz.*.tmp")) == []
 
 
 def test_publish_candidate_rejects_zero_matches_preserves_previous_and_skips_side_effects(

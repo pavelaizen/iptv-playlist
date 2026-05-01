@@ -93,8 +93,7 @@ def download_epg(source_url: str, destination: Path) -> None:
             with temp_path.open("wb") as output_fh:
                 shutil.copyfileobj(response, output_fh)
 
-        with _gzip_open_read(temp_path) as gzip_fh:
-            gzip_fh.read(1)
+        _validate_gzip_stream(temp_path)
 
         os.replace(temp_path, destination)
     except Exception:
@@ -214,6 +213,12 @@ def _replace_file(source: Path, destination: Path) -> None:
 
 def _gzip_open_read(path: Path):
     return closing(gzip.open(path, "rb"))
+
+
+def _validate_gzip_stream(path: Path) -> None:
+    with _gzip_open_read(path) as gzip_fh:
+        while gzip_fh.read(1024 * 1024):
+            pass
 
 
 def _env_int(name: str, default: int) -> int:
