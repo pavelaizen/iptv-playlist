@@ -36,11 +36,32 @@ def test_extract_playlist_channel_names_reads_extinf_without_urls(tmp_path: Path
     assert "secret-token" not in repr(names)
 
 
+def test_extract_playlist_channel_names_reads_extinf_case_insensitively(tmp_path: Path):
+    playlist = tmp_path / "playlist.m3u"
+    playlist.write_text(
+        "#EXTM3U\n"
+        "#extinf:-1,Lowercase Marker\n"
+        "http://provider.invalid/secret-token\n",
+        encoding="utf-8",
+    )
+
+    names = epg.extract_playlist_channel_names(playlist)
+
+    assert names == ["Lowercase Marker"]
+    assert "provider.invalid" not in repr(names)
+
+
 def test_normalize_channel_name_handles_case_punctuation_and_whitespace():
     assert epg.normalize_channel_name("  Кино-UHD!!  ") == epg.normalize_channel_name(
         "кино uhd"
     )
     assert epg.normalize_channel_name("Channel   One") == "channel one"
+
+
+def test_normalize_channel_name_handles_compatibility_and_combining_forms():
+    assert epg.normalize_channel_name("Ｃａｆｅ\u0301 ＯＮＥ") == epg.normalize_channel_name(
+        "Café One"
+    )
 
 
 def test_trim_xmltv_keeps_only_matching_channels_and_programmes(tmp_path: Path):
@@ -111,3 +132,32 @@ def test_trim_xmltv_reports_unmatched_playlist_names(tmp_path: Path):
     assert summary.matched_channel_count == 0
     assert summary.programme_count == 0
     assert summary.unmatched_playlist_names == ("Missing Channel",)
+
+
+def test_trim_xmltv_preserves_matching_programmes_before_channels(tmp_path: Path):
+    playlist = tmp_path / "playlist.m3u"
+    playlist.write_text(
+        "#EXTM3U\n"
+        "#EXTINF:-1,Channel One\n"
+        "http://provider.invalid/one\n",
+        encoding="utf-8",
+    )
+    source = tmp_path / "source.xml.gz"
+    output = tmp_path / "epg.xml.gz"
+    write_gzip(
+        source,
+        "<tv>"
+        "  <programme channel='one'><title>Before Channel</title></programme>"
+        "  <channel id='one'><display-name>Channel One</display-name></channel>"
+        "</tv>",
+    )
+
+    summary = epg.trim_xmltv_to_playlist_channels(source, playlist, output)
+
+    root = ET.fromstring(read_gzip(output))
+    assert [channel.attrib["id"] for channel in root.findall("channel")] == ["one"]
+    assert [programme.attrib["channel"] for programme in root.findall("programme")] == [
+        "one"
+    ]
+    assert summary.matched_channel_count == 1
+    assert summary.programme_count == 1
