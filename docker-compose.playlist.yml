@@ -4,6 +4,6 @@ services:
     container_name: playlist-static
     restart: unless-stopped
     ports:
-      - "8080:80"
+      - "8766:80"
     volumes:
       - ./published:/usr/share/nginx/html:ro

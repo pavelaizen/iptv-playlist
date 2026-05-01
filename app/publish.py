@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 import logging
+import os
 
 LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class GuardDecision:
     """Result from evaluating whether a candidate clean playlist can be published."""
 
     publish_candidate: bool
+    content_changed: bool
     selected_path: Path
     candidate_valid_channels: int
     previous_valid_channels: int
@@ -63,6 +65,16 @@ def _write_diagnostic_file(
     return diag_path
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+    try:
+        tmp_path.write_text(content, encoding="utf-8")
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def select_playlist_for_publish(
     *,
     candidate_output_path: Path,
@@ -74,14 +86,18 @@ def select_playlist_for_publish(
 
     candidate_valid_channels = count_valid_channels(candidate_content.splitlines())
     previous_content = previous_clean_path.read_text(encoding="utf-8") if previous_clean_path.exists() else ""
+    published_content = candidate_output_path.read_text(encoding="utf-8") if candidate_output_path.exists() else ""
     previous_valid_channels = count_valid_channels(previous_content.splitlines())
 
     required_minimum = _calculate_required_minimum(previous_valid_channels, config)
 
     if candidate_valid_channels >= required_minimum:
-        candidate_output_path.write_text(candidate_content, encoding="utf-8")
+        content_changed = not candidate_output_path.exists() or candidate_content != published_content
+        if content_changed:
+            _atomic_write_text(candidate_output_path, candidate_content)
         return GuardDecision(
             publish_candidate=True,
+            content_changed=content_changed,
             selected_path=candidate_output_path,
             candidate_valid_channels=candidate_valid_channels,
             previous_valid_channels=previous_valid_channels,
@@ -98,7 +114,7 @@ def select_playlist_for_publish(
         )
 
     if previous_clean_path.exists():
-        candidate_output_path.write_text(previous_content, encoding="utf-8")
+        _atomic_write_text(candidate_output_path, previous_content)
 
     LOGGER.warning(
         "playlist_publish_guard_failed",
@@ -115,6 +131,7 @@ def select_playlist_for_publish(
 
     return GuardDecision(
         publish_candidate=False,
+        content_changed=False,
         selected_path=previous_clean_path if previous_clean_path.exists() else candidate_output_path,
         candidate_valid_channels=candidate_valid_channels,
         previous_valid_channels=previous_valid_channels,

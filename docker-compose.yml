@@ -5,27 +5,32 @@ services:
       dockerfile: Dockerfile.playlist-sanitizer
     container_name: playlist-sanitizer
     working_dir: /app
+    network_mode: host
     volumes:
-      - ./playlist_emby_raw.m3u:/data/input/playlist.m3u:ro
-      - ./output:/data/output:rw
+      - ./original_playlist.m3u8:/data/input/playlist.m3u:ro
+      - ./published:/data/output:rw
+      - ./output:/data/state:rw
       - ./app:/app/app:ro
       - ./healthcheck.py:/app/healthcheck.py:ro
     environment:
+      TZ: ${TZ:-Asia/Jerusalem}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       RUN_INTERVAL_HOURS: ${RUN_INTERVAL_HOURS:-24}
+      FULL_CHECK_TIME: ${FULL_CHECK_TIME:-03:00}
       EXTRA_RUN_DELAYS_MINUTES: ${EXTRA_RUN_DELAYS_MINUTES:-30,60,240}
 
       # I/O settings
       RAW_PLAYLIST_PATH: ${RAW_PLAYLIST_PATH:-/data/input/playlist.m3u}
       OUTPUT_DIR: ${OUTPUT_DIR:-/data/output}
-      OUTPUT_PLAYLIST_NAME: ${OUTPUT_PLAYLIST_NAME:-playlist_clean.m3u}
-      STATE_FILE: ${STATE_FILE:-/data/output/.playlist_sanitizer_state}
+      OUTPUT_PLAYLIST_NAME: ${OUTPUT_PLAYLIST_NAME:-playlist_emby_clean.m3u}
+      STATE_FILE: ${STATE_FILE:-/data/state/.playlist_sanitizer_state}
+      DIAGNOSTICS_DIR: ${DIAGNOSTICS_DIR:-/data/state/diagnostics}
 
       # Probe settings
       PROBE_TIMEOUT_SECONDS: ${PROBE_TIMEOUT_SECONDS:-15}
-      PROBE_READ_INTERVAL_US: ${PROBE_READ_INTERVAL_US:-5000000}
-      PROBE_USER_AGENT: ${PROBE_USER_AGENT:-playlist-sanitizer/1.0}
-      PROBE_FFMPEG_LOGLEVEL: ${PROBE_FFMPEG_LOGLEVEL:-error}
-      PROBE_EXTRA_ARGS: ${PROBE_EXTRA_ARGS:-}
+      PROBE_CONCURRENCY: ${PROBE_CONCURRENCY:-20}
+      PROBE_RETRIES: ${PROBE_RETRIES:-1}
+      PROBE_RETRY_DELAY_SECONDS: ${PROBE_RETRY_DELAY_SECONDS:-1}
 
       # Emby settings
       EMBY_BASE_URL: ${EMBY_BASE_URL:-}
@@ -38,4 +43,35 @@ services:
       timeout: 15s
       retries: 3
       start_period: 2m
+    restart: unless-stopped
+
+  epg-trimmer:
+    build:
+      context: .
+      dockerfile: Dockerfile.playlist-sanitizer
+    container_name: epg-trimmer
+    working_dir: /app
+    network_mode: host
+    volumes:
+      - ./published:/data/output:rw
+      - ./output:/data/state:rw
+      - ./app:/app/app:ro
+    environment:
+      TZ: ${TZ:-Asia/Jerusalem}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      EPG_SOURCE_URL: ${EPG_SOURCE_URL:-http://epg.one/epg2.xml.gz}
+      EPG_RUN_TIME: ${EPG_RUN_TIME:-04:00}
+      EPG_PLAYLIST_PATH: ${EPG_PLAYLIST_PATH:-/data/output/playlist_emby_clean.m3u}
+      EPG_OUTPUT_PATH: ${EPG_OUTPUT_PATH:-/data/output/epg.xml}
+      EPG_STATE_FILE: ${EPG_STATE_FILE:-/data/state/.epg_trimmer_state}
+      EPG_WORK_DIR: ${EPG_WORK_DIR:-/data/state/epg}
+      EPG_MIN_MATCHED_CHANNELS: ${EPG_MIN_MATCHED_CHANNELS:-1}
+      EPG_MIN_PROGRAMMES: ${EPG_MIN_PROGRAMMES:-1}
+
+      # Emby settings
+      EMBY_BASE_URL: ${EMBY_BASE_URL:-}
+      EMBY_API_KEY: ${EMBY_API_KEY:-}
+      EMBY_LIVETV_TUNER_ID: ${EMBY_LIVETV_TUNER_ID:-}
+
+    command: ["python", "-m", "app.epg_worker"]
     restart: unless-stopped

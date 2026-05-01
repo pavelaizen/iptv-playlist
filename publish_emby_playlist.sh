@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SRC_FILE="${SRC_FILE:-playlist_emby_raw.m3u}"
+SRC_FILE="${SRC_FILE:-original_playlist.m3u8}"
 PUBLISH_DIR="${PUBLISH_DIR:-published}"
 DEST_FILE_NAME="${DEST_FILE_NAME:-playlist_emby_clean.m3u}"
 DEST_FILE="${PUBLISH_DIR}/${DEST_FILE_NAME}"

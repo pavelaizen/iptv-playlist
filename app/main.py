@@ -4,15 +4,17 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.emby_client import refresh_livetv_after_publish
-from app.probe import ProbeSettings, probe_channels
+from app.probe import ProbeSettings, ProbeTarget, probe_channels
 from app.publish import PublishGuardConfig, select_playlist_for_publish
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -27,16 +29,17 @@ OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/data/output"))
 OUTPUT_PLAYLIST_NAME = os.getenv("OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u")
 PREVIOUS_CLEAN_PLAYLIST_NAME = os.getenv("PREVIOUS_CLEAN_PLAYLIST_NAME", OUTPUT_PLAYLIST_NAME)
 STATE_FILE = Path(os.getenv("STATE_FILE", "/data/output/.playlist_sanitizer_state"))
-RUN_INTERVAL_HOURS = float(os.getenv("RUN_INTERVAL_HOURS", "24"))
 DIAGNOSTICS_DIR = Path(os.getenv("DIAGNOSTICS_DIR", str(OUTPUT_DIR / "diagnostics")))
 MIN_VALID_CHANNELS_ABSOLUTE = int(os.getenv("MIN_VALID_CHANNELS_ABSOLUTE", "1"))
 MIN_VALID_RATIO_OF_PREVIOUS = float(os.getenv("MIN_VALID_RATIO_OF_PREVIOUS", "0.7"))
 EXTRA_RUN_DELAYS_MINUTES_RAW = os.getenv("EXTRA_RUN_DELAYS_MINUTES", "30,60,240")
+FULL_CHECK_TIME = os.getenv("FULL_CHECK_TIME", "03:00")
 
 
 @dataclass(slots=True)
 class CycleState:
     entries: list[tuple[list[str], str]]
+    targets_by_url: dict[str, ProbeTarget]
     known_valid_urls: set[str]
     pending_offline_urls: set[str]
 
@@ -67,6 +70,53 @@ def parse_extra_run_offsets_seconds(raw_value: str) -> list[float]:
     return sorted(offsets)
 
 
+def parse_full_check_time(raw_value: str) -> tuple[int, int]:
+    value = raw_value.strip()
+    try:
+        hour_text, minute_text = value.split(":", 1)
+        hour = int(hour_text)
+        minute = int(minute_text)
+    except ValueError:
+        LOG.warning("invalid FULL_CHECK_TIME=%r, using 03:00", raw_value)
+        return 3, 0
+
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        LOG.warning("invalid FULL_CHECK_TIME=%r, using 03:00", raw_value)
+        return 3, 0
+
+    return hour, minute
+
+
+def seconds_until_next_full_check_time(now: datetime, full_check_time: tuple[int, int]) -> float:
+    hour, minute = full_check_time
+    local_now = now.astimezone(_scheduler_zoneinfo(now.tzinfo))
+    target = datetime.combine(
+        local_now.date(),
+        datetime_time(hour=hour, minute=minute),
+        tzinfo=local_now.tzinfo,
+    )
+    if target <= local_now:
+        target += timedelta(days=1)
+    return target.timestamp() - local_now.timestamp()
+
+
+def _scheduler_zoneinfo(fallback_tzinfo):
+    timezone_name = os.getenv("TZ")
+    if not timezone_name:
+        return fallback_tzinfo
+
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        LOG.warning("invalid TZ=%r, using caller timezone", timezone_name)
+        return fallback_tzinfo
+
+
+def should_run_immediately_on_start() -> bool:
+    clean_playlist_path = OUTPUT_DIR / OUTPUT_PLAYLIST_NAME
+    return not (STATE_FILE.exists() and clean_playlist_path.exists())
+
+
 def parse_m3u(path: Path) -> list[tuple[list[str], str]]:
     lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
     entries: list[tuple[list[str], str]] = []
@@ -75,6 +125,8 @@ def parse_m3u(path: Path) -> list[tuple[list[str], str]]:
     for line in lines:
         stripped = line.strip()
         if not stripped:
+            continue
+        if stripped.upper().startswith("#EXTM3U"):
             continue
         if stripped.startswith("#"):
             pending_meta.append(line)
@@ -96,6 +148,36 @@ def build_candidate_playlist(entries: list[tuple[list[str], str]], valid_urls: s
     return "\n".join(out_lines) + "\n"
 
 
+def extract_channel_name(metadata_lines: list[str]) -> str:
+    for line in reversed(metadata_lines):
+        stripped = line.strip()
+        if not stripped.upper().startswith("#EXTINF"):
+            continue
+        _, _, candidate = stripped.rpartition(",")
+        candidate = candidate.strip()
+        if candidate:
+            return candidate
+    return "unnamed-channel"
+
+
+def build_probe_targets(entries: list[tuple[list[str], str]]) -> list[ProbeTarget]:
+    targets: list[ProbeTarget] = []
+    for metadata_lines, url in entries:
+        normalized_url = url.strip()
+        targets.append(
+            ProbeTarget(
+                url=normalized_url,
+                name=extract_channel_name(metadata_lines),
+                fingerprint=hashlib.sha1(normalized_url.encode("utf-8")).hexdigest()[:10],
+            )
+        )
+    return targets
+
+
+def format_probe_target(target: ProbeTarget) -> str:
+    return f"name={target.name!r} fingerprint={target.fingerprint}"
+
+
 def _publish_candidate(candidate_content: str) -> bool:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     candidate_output_path = OUTPUT_DIR / OUTPUT_PLAYLIST_NAME
@@ -113,21 +195,25 @@ def _publish_candidate(candidate_content: str) -> bool:
     )
 
     LOG.info(
-        "publish complete guard=%s candidate_valid=%d previous_valid=%d required_minimum=%d selected=%s",
+        "publish complete guard=%s changed=%s candidate_valid=%d previous_valid=%d required_minimum=%d selected=%s",
         guard_decision.reason,
+        guard_decision.content_changed,
         guard_decision.candidate_valid_channels,
         guard_decision.previous_valid_channels,
         guard_decision.required_minimum,
         guard_decision.selected_path,
     )
 
-    if guard_decision.publish_candidate:
+    if guard_decision.publish_candidate and guard_decision.content_changed:
         warning = refresh_livetv_after_publish(LOG)
         if warning:
             LOG.warning(warning)
+    elif guard_decision.publish_candidate:
+        LOG.info("Emby refresh skipped: clean playlist content unchanged")
 
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(now_iso() + "\n", encoding="utf-8")
+    if guard_decision.publish_candidate:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        STATE_FILE.write_text(now_iso() + "\n", encoding="utf-8")
     return guard_decision.publish_candidate
 
 
@@ -137,8 +223,9 @@ async def run_full_check() -> CycleState | None:
         return None
 
     entries = parse_m3u(RAW_PLAYLIST_PATH)
-    urls = [url.strip() for _, url in entries]
-    probe_results, stats = await probe_channels(urls, ProbeSettings.from_env())
+    probe_targets = build_probe_targets(entries)
+    LOG.info("full check starting entries=%d input=%s", len(probe_targets), RAW_PLAYLIST_PATH)
+    probe_results, stats = await probe_channels(probe_targets, ProbeSettings.from_env())
 
     valid_urls = {result.channel for result in probe_results if result.valid}
     offline_urls = {result.channel for result in probe_results if not result.valid}
@@ -149,23 +236,31 @@ async def run_full_check() -> CycleState | None:
 
     return CycleState(
         entries=entries,
+        targets_by_url={target.url: target for target in probe_targets},
         known_valid_urls=valid_urls,
         pending_offline_urls=offline_urls,
     )
-
-
-
 
 async def run_once() -> bool:
     """Backward-compatible single full check entrypoint used by tests."""
     state = await run_full_check()
     return state is not None
+
+
 async def run_recovery_check(state: CycleState) -> None:
     if not state.pending_offline_urls:
         LOG.info("recovery check skipped: no offline channels pending")
         return
 
-    probe_results, stats = await probe_channels(sorted(state.pending_offline_urls), ProbeSettings.from_env())
+    pending_targets = [
+        state.targets_by_url.get(url, ProbeTarget(url=url))
+        for url in sorted(state.pending_offline_urls)
+    ]
+    LOG.info("recovery check starting pending=%d", len(pending_targets))
+    for target in pending_targets:
+        LOG.debug("recovery_retry_target %s", format_probe_target(target))
+
+    probe_results, stats = await probe_channels(pending_targets, ProbeSettings.from_env())
     recovered = {result.channel for result in probe_results if result.valid}
     still_offline = {result.channel for result in probe_results if not result.valid}
 
@@ -181,6 +276,9 @@ async def run_recovery_check(state: CycleState) -> None:
     )
 
     if recovered:
+        for url in sorted(recovered):
+            target = state.targets_by_url.get(url, ProbeTarget(url=url))
+            LOG.info("recovery_channel_restored %s", format_probe_target(target))
         candidate_content = build_candidate_playlist(state.entries, state.known_valid_urls)
         _publish_candidate(candidate_content)
 
@@ -221,20 +319,25 @@ def _run_cycle_with_extra_delays(extra_run_offsets_seconds: list[float]) -> None
 
 
 def main() -> None:
-    interval_seconds = max(60.0, RUN_INTERVAL_HOURS * 3600.0)
     extra_run_offsets_seconds = parse_extra_run_offsets_seconds(EXTRA_RUN_DELAYS_MINUTES_RAW)
+    full_check_time = parse_full_check_time(FULL_CHECK_TIME)
 
     LOG.info(
-        "scheduler configured base_interval_hours=%.2f extra_run_offsets_minutes=%s",
-        RUN_INTERVAL_HOURS,
+        "scheduler configured full_check_time=%02d:%02d extra_run_offsets_minutes=%s",
+        full_check_time[0],
+        full_check_time[1],
         [round(offset / 60.0, 3) for offset in extra_run_offsets_seconds],
     )
 
+    if not should_run_immediately_on_start():
+        sleep_seconds = seconds_until_next_full_check_time(datetime.now().astimezone(), full_check_time)
+        LOG.info("initial full check scheduled in %.0f seconds", sleep_seconds)
+        time.sleep(sleep_seconds)
+
     while True:
-        cycle_started_at = time.monotonic()
         _run_cycle_with_extra_delays(extra_run_offsets_seconds)
-        elapsed = time.monotonic() - cycle_started_at
-        sleep_seconds = max(0.0, interval_seconds - elapsed)
+        sleep_seconds = seconds_until_next_full_check_time(datetime.now().astimezone(), full_check_time)
+        LOG.info("next full check scheduled in %.0f seconds", sleep_seconds)
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
 

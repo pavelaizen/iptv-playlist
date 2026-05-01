@@ -1,3 +1,8 @@
+.*/
+!.github/
+!.github/**
+.codex
+.venv-tools/
 published/*.tmp
 published/playlist_emby_clean.m3u
 __pycache__/
