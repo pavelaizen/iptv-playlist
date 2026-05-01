@@ -38,7 +38,7 @@ class EpgWorkerSettings:
             playlist_path=Path(
                 os.getenv("EPG_PLAYLIST_PATH", "/data/output/playlist_emby_clean.m3u")
             ),
-            output_path=Path(os.getenv("EPG_OUTPUT_PATH", "/data/output/epg.xml.gz")),
+            output_path=Path(os.getenv("EPG_OUTPUT_PATH", "/data/output/epg.xml")),
             state_file=Path(
                 os.getenv("EPG_STATE_FILE", "/data/state/.epg_trimmer_state")
             ),
@@ -105,11 +105,11 @@ def download_epg(source_url: str, destination: Path) -> None:
         raise
 
 
-def _same_gzip_payload(left: Path, right: Path) -> bool:
+def _same_file_payload(left: Path, right: Path) -> bool:
     if not left.exists() or not right.exists():
         return False
 
-    with _gzip_open_read(left) as left_fh, _gzip_open_read(right) as right_fh:
+    with left.open("rb") as left_fh, right.open("rb") as right_fh:
         while True:
             left_chunk = left_fh.read(1024 * 1024)
             right_chunk = right_fh.read(1024 * 1024)
@@ -140,7 +140,7 @@ def publish_candidate(
         )
         return False
 
-    content_changed = not _same_gzip_payload(candidate_path, settings.output_path)
+    content_changed = not _same_file_payload(candidate_path, settings.output_path)
     if content_changed:
         _replace_file(candidate_path, settings.output_path)
         warning = refresh_livetv_after_publish(LOG)
@@ -162,13 +162,13 @@ def run_once(settings: EpgWorkerSettings | None = None) -> bool:
 
     settings.work_dir.mkdir(parents=True, exist_ok=True)
     source_path = settings.work_dir / "source.xml.gz"
-    candidate_path = settings.work_dir / "candidate.xml.gz"
+    candidate_path = settings.work_dir / "candidate.xml"
 
     download_epg(settings.source_url, source_path)
     summary = trim_xmltv_to_playlist_channels(
         source_xmltv_gz_path=source_path,
         playlist_path=settings.playlist_path,
-        output_xmltv_gz_path=candidate_path,
+        output_xmltv_path=candidate_path,
     )
     return publish_candidate(candidate_path, settings, summary)
 

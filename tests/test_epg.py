@@ -17,6 +17,10 @@ def read_gzip(path: Path) -> str:
         return fh.read()
 
 
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
 def test_extract_playlist_channel_names_reads_extinf_without_urls(tmp_path: Path):
     playlist = tmp_path / "playlist.m3u"
     playlist.write_text(
@@ -105,7 +109,7 @@ def test_trim_xmltv_keeps_only_matching_channels_and_programmes(tmp_path: Path):
         encoding="utf-8",
     )
     source = tmp_path / "source.xml.gz"
-    output = tmp_path / "epg.xml.gz"
+    output = tmp_path / "epg.xml"
     write_gzip(
         source,
         "<?xml version='1.0' encoding='UTF-8'?>\n"
@@ -122,10 +126,10 @@ def test_trim_xmltv_keeps_only_matching_channels_and_programmes(tmp_path: Path):
     summary = epg.trim_xmltv_to_playlist_channels(
         source_xmltv_gz_path=source,
         playlist_path=playlist,
-        output_xmltv_gz_path=output,
+        output_xmltv_path=output,
     )
 
-    text = read_gzip(output)
+    text = read_text(output)
     root = ET.fromstring(text)
     assert root.tag == "tv"
     assert root.attrib["source-info-name"] == "unit-test"
@@ -150,7 +154,7 @@ def test_trim_xmltv_reports_unmatched_playlist_names(tmp_path: Path):
         encoding="utf-8",
     )
     source = tmp_path / "source.xml.gz"
-    output = tmp_path / "epg.xml.gz"
+    output = tmp_path / "epg.xml"
     write_gzip(
         source,
         "<tv><channel id='one'><display-name>Channel One</display-name></channel></tv>",
@@ -173,7 +177,7 @@ def test_trim_xmltv_preserves_matching_programmes_before_channels(tmp_path: Path
         encoding="utf-8",
     )
     source = tmp_path / "source.xml.gz"
-    output = tmp_path / "epg.xml.gz"
+    output = tmp_path / "epg.xml"
     write_gzip(
         source,
         "<tv>"
@@ -184,7 +188,39 @@ def test_trim_xmltv_preserves_matching_programmes_before_channels(tmp_path: Path
 
     summary = epg.trim_xmltv_to_playlist_channels(source, playlist, output)
 
-    root = ET.fromstring(read_gzip(output))
+    root = ET.fromstring(read_text(output))
+    assert [channel.attrib["id"] for channel in root.findall("channel")] == ["one"]
+    assert [programme.attrib["channel"] for programme in root.findall("programme")] == [
+        "one"
+    ]
+    assert summary.matched_channel_count == 1
+    assert summary.programme_count == 1
+
+
+def test_trim_xmltv_does_not_build_elementtree_for_programmes(
+    tmp_path: Path,
+):
+    playlist = tmp_path / "playlist.m3u"
+    playlist.write_text(
+        "#EXTM3U\n"
+        "#EXTINF:-1,Channel One\n"
+        "http://provider.invalid/one\n",
+        encoding="utf-8",
+    )
+    source = tmp_path / "source.xml.gz"
+    output = tmp_path / "epg.xml"
+    write_gzip(
+        source,
+        "<tv>"
+        "  <channel id='one'><display-name>Channel One</display-name></channel>"
+        "  <programme channel='one'><title>One</title></programme>"
+        "</tv>",
+    )
+
+    summary = epg.trim_xmltv_to_playlist_channels(source, playlist, output)
+
+    assert not hasattr(epg, "ET")
+    root = ET.fromstring(read_text(output))
     assert [channel.attrib["id"] for channel in root.findall("channel")] == ["one"]
     assert [programme.attrib["channel"] for programme in root.findall("programme")] == [
         "one"

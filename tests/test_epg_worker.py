@@ -17,6 +17,10 @@ def gzip_text(path: Path) -> str:
         return fh.read()
 
 
+def plain_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
 def write_gzip(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(path, "wt", encoding="utf-8") as fh:
@@ -43,7 +47,7 @@ def settings_for(tmp_path: Path) -> epg_worker.EpgWorkerSettings:
         source_url="http://example.invalid/epg.xml.gz",
         run_time=(4, 0),
         playlist_path=tmp_path / "playlist.m3u",
-        output_path=tmp_path / "published" / "epg.xml.gz",
+        output_path=tmp_path / "published" / "epg.xml",
         state_file=tmp_path / "state" / ".epg_trimmer_state",
         work_dir=tmp_path / "state" / "epg",
         min_matched_channels=1,
@@ -62,7 +66,15 @@ def test_seconds_until_next_run_time_wraps_to_next_day():
 
 
 def test_should_run_immediately_when_output_missing(tmp_path: Path):
-    assert epg_worker.should_run_immediately(tmp_path / "missing.xml.gz") is True
+    assert epg_worker.should_run_immediately(tmp_path / "missing.xml") is True
+
+
+def test_settings_from_env_defaults_to_plain_xml_output(monkeypatch):
+    monkeypatch.delenv("EPG_OUTPUT_PATH", raising=False)
+
+    settings = epg_worker.EpgWorkerSettings.from_env()
+
+    assert settings.output_path == Path("/data/output/epg.xml")
 
 
 def test_settings_from_env_rejects_negative_guard_values(monkeypatch):
@@ -160,9 +172,10 @@ def test_publish_candidate_rejects_zero_matches_preserves_previous_and_skips_sid
 ):
     settings = settings_for(tmp_path)
     previous_payload = "<tv><channel id='previous'/></tv>"
-    candidate = tmp_path / "candidate.xml.gz"
-    write_gzip(settings.output_path, previous_payload)
-    write_gzip(candidate, "<tv></tv>")
+    candidate = tmp_path / "candidate.xml"
+    settings.output_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.output_path.write_text(previous_payload, encoding="utf-8")
+    candidate.write_text("<tv></tv>", encoding="utf-8")
     refresh_calls = []
     monkeypatch.setattr(
         epg_worker,
@@ -183,7 +196,7 @@ def test_publish_candidate_rejects_zero_matches_preserves_previous_and_skips_sid
     )
 
     assert accepted is False
-    assert gzip_text(settings.output_path) == previous_payload
+    assert plain_text(settings.output_path) == previous_payload
     assert not settings.state_file.exists()
     assert refresh_calls == []
 
@@ -193,9 +206,10 @@ def test_publish_candidate_skips_refresh_when_payload_unchanged_and_writes_state
     monkeypatch,
 ):
     settings = settings_for(tmp_path)
-    candidate = tmp_path / "candidate.xml.gz"
+    candidate = tmp_path / "candidate.xml"
     payload = "<tv><channel id='one'/><programme channel='one'/></tv>"
-    write_gzip(settings.output_path, payload)
+    settings.output_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.output_path.write_text(payload, encoding="utf-8")
     shutil.copyfile(settings.output_path, candidate)
     refresh_calls = []
     monkeypatch.setattr(
@@ -217,7 +231,7 @@ def test_publish_candidate_skips_refresh_when_payload_unchanged_and_writes_state
     )
 
     assert accepted is True
-    assert gzip_text(settings.output_path) == payload
+    assert plain_text(settings.output_path) == payload
     assert settings.state_file.read_text(encoding="utf-8").strip()
     assert refresh_calls == []
 
@@ -227,9 +241,13 @@ def test_publish_candidate_replaces_changed_output_and_refreshes_once(
     monkeypatch,
 ):
     settings = settings_for(tmp_path)
-    candidate = tmp_path / "candidate.xml.gz"
-    write_gzip(settings.output_path, "<tv><channel id='old'/></tv>")
-    write_gzip(candidate, "<tv><channel id='new'/><programme channel='new'/></tv>")
+    candidate = tmp_path / "candidate.xml"
+    settings.output_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.output_path.write_text("<tv><channel id='old'/></tv>", encoding="utf-8")
+    candidate.write_text(
+        "<tv><channel id='new'/><programme channel='new'/></tv>",
+        encoding="utf-8",
+    )
     refresh_calls = []
     monkeypatch.setattr(
         epg_worker,
@@ -250,7 +268,7 @@ def test_publish_candidate_replaces_changed_output_and_refreshes_once(
     )
 
     assert accepted is True
-    assert gzip_text(settings.output_path) == (
+    assert plain_text(settings.output_path) == (
         "<tv><channel id='new'/><programme channel='new'/></tv>"
     )
     assert settings.state_file.read_text(encoding="utf-8").strip()

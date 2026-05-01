@@ -22,8 +22,8 @@ Do not paste real playlist URL lines, provider hostnames, subscription tokens, o
 - `app/probe.py` - async `ffprobe` worker utilities. A channel is valid when `ffprobe` exits 0 and returns at least one stream in JSON.
 - `app/publish.py` - publish guard logic. Counts `#EXTINF` records, compares candidate vs previous clean playlist, writes diagnostics on guard failure, and preserves previous content when available.
 - `app/emby_client.py` - optional non-fatal Emby API refresh client. Reads Emby env vars and posts Live TV refresh/reset endpoints after successful publish.
-- `app/epg.py` - XMLTV trimming library. Extracts clean-playlist channel names, matches upstream EPG display names, and writes a gzip XMLTV containing only matched channels and programmes.
-- `app/epg_worker.py` - daily EPG worker. Downloads upstream XMLTV, calls the trimmer, publishes `epg.xml.gz` atomically, and refreshes Emby only after changed successful output.
+- `app/epg.py` - XMLTV trimming library. Extracts clean-playlist channel names, matches upstream EPG display names, and writes a plain XMLTV containing only matched channels and programmes.
+- `app/epg_worker.py` - daily EPG worker. Downloads upstream XMLTV, calls the trimmer, publishes `epg.xml` atomically, and refreshes Emby only after changed successful output.
 - `healthcheck.py` - container healthcheck. Fails when the sanitizer state file is missing, invalid, or older than twice `RUN_INTERVAL_HOURS` with a 1 hour minimum.
 - `publish_emby_playlist.sh` - simple atomic publisher for the raw Emby playlist. Normalizes CRLF and removes empty lines before moving a temp file into place.
 - `Dockerfile.playlist-sanitizer` - Python 3.12 slim image with `ffmpeg` installed for `ffprobe`.
@@ -36,7 +36,7 @@ Do not paste real playlist URL lines, provider hostnames, subscription tokens, o
 
 - `original_playlist.m3u8` - local source-of-truth raw Emby input playlist mounted by `docker-compose.yml`; do not commit real subscription material.
 - `published/playlist_emby_clean.m3u` - generated Emby-facing clean playlist served by nginx; do not commit it.
-- `published/epg.xml.gz` - generated trimmed XMLTV guide served by nginx; do not commit it.
+- `published/epg.xml` - generated trimmed XMLTV guide served by nginx; do not commit it.
 
 Treat the playlist files as subscription material, not examples to quote verbatim. The source-of-truth raw playlist is `original_playlist.m3u8`.
 Generated playlist and EPG files under `published/` should stay out of commits.
@@ -61,9 +61,9 @@ Generated playlist and EPG files under `published/` should stay out of commits.
 1. Download `EPG_SOURCE_URL` to private state storage.
 2. Read `EPG_PLAYLIST_PATH`, normally `published/playlist_emby_clean.m3u`.
 3. Match playlist channel names against XMLTV `<channel><display-name>`.
-4. Write a candidate gzip XMLTV containing only matched channels and programmes.
+4. Write a candidate plain XMLTV containing only matched channels and programmes.
 5. Reject zero-match or zero-programme candidates and preserve the previous EPG.
-6. Atomically publish changed output to `EPG_OUTPUT_PATH`, normally `published/epg.xml.gz`.
+6. Atomically publish changed output to `EPG_OUTPUT_PATH`, normally `published/epg.xml`.
 7. Refresh Emby only after changed successful output.
 8. Sleep until the next configured local-container `EPG_RUN_TIME`.
 
@@ -122,7 +122,7 @@ Read by `app/epg_worker.py`:
 - `EPG_SOURCE_URL` default `http://epg.one/epg2.xml.gz`
 - `EPG_RUN_TIME` default `04:00`, local container time for daily EPG trimming
 - `EPG_PLAYLIST_PATH` default `/data/output/playlist_emby_clean.m3u`
-- `EPG_OUTPUT_PATH` default `/data/output/epg.xml.gz`
+- `EPG_OUTPUT_PATH` default `/data/output/epg.xml`
 - `EPG_STATE_FILE` default `/data/state/.epg_trimmer_state`
 - `EPG_WORK_DIR` default `/data/state/epg`
 - `EPG_MIN_MATCHED_CHANNELS` default `1`
@@ -140,7 +140,7 @@ Read by `publish_emby_playlist.sh`:
 - `DEST_FILE_NAME` default `playlist_emby_clean.m3u`
 
 Compose note: `docker-compose.yml` maps `./published` to `/data/output` so the sanitizer updates the same `playlist_emby_clean.m3u` file served by nginx. It maps `./output` to `/data/state` for healthcheck state and diagnostics, keeping diagnostics out of the public static directory.
-The EPG trimmer uses the same `./published` and `./output` mounts, publishes `epg.xml.gz` into the static directory, and keeps downloaded/candidate EPG state under `./output`.
+The EPG trimmer uses the same `./published` and `./output` mounts, publishes `epg.xml` into the static directory, and keeps downloaded/candidate EPG state under `./output`.
 
 ## Common Commands
 

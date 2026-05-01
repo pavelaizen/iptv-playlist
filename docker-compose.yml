@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile.playlist-sanitizer
     container_name: playlist-sanitizer
     working_dir: /app
+    network_mode: host
     volumes:
       - ./original_playlist.m3u8:/data/input/playlist.m3u:ro
       - ./published:/data/output:rw
@@ -50,6 +51,7 @@ services:
       dockerfile: Dockerfile.playlist-sanitizer
     container_name: epg-trimmer
     working_dir: /app
+    network_mode: host
     volumes:
       - ./published:/data/output:rw
       - ./output:/data/state:rw
@@ -60,7 +62,7 @@ services:
       EPG_SOURCE_URL: ${EPG_SOURCE_URL:-http://epg.one/epg2.xml.gz}
       EPG_RUN_TIME: ${EPG_RUN_TIME:-04:00}
       EPG_PLAYLIST_PATH: ${EPG_PLAYLIST_PATH:-/data/output/playlist_emby_clean.m3u}
-      EPG_OUTPUT_PATH: ${EPG_OUTPUT_PATH:-/data/output/epg.xml.gz}
+      EPG_OUTPUT_PATH: ${EPG_OUTPUT_PATH:-/data/output/epg.xml}
       EPG_STATE_FILE: ${EPG_STATE_FILE:-/data/state/.epg_trimmer_state}
       EPG_WORK_DIR: ${EPG_WORK_DIR:-/data/state/epg}
       EPG_MIN_MATCHED_CHANNELS: ${EPG_MIN_MATCHED_CHANNELS:-1}
