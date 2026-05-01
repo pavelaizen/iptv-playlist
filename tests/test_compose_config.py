@@ -26,3 +26,21 @@ def test_compose_does_not_expose_ignored_probe_environment_variables():
     assert "PROBE_USER_AGENT" not in compose
     assert "PROBE_FFMPEG_LOGLEVEL" not in compose
     assert "PROBE_EXTRA_ARGS" not in compose
+
+
+def test_epg_trimmer_writes_epg_served_by_static_container():
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    static_compose = Path("docker-compose.playlist.yml").read_text(encoding="utf-8")
+
+    assert "epg-trimmer:" in compose
+    assert "container_name: epg-trimmer" in compose
+    assert "EPG_RUN_TIME: ${EPG_RUN_TIME:-04:00}" in compose
+    assert "EPG_SOURCE_URL: ${EPG_SOURCE_URL:-http://epg.one/epg2.xml.gz}" in compose
+    assert "EPG_PLAYLIST_PATH: ${EPG_PLAYLIST_PATH:-/data/output/playlist_emby_clean.m3u}" in compose
+    assert "EPG_OUTPUT_PATH: ${EPG_OUTPUT_PATH:-/data/output/epg.xml.gz}" in compose
+    assert "EPG_STATE_FILE: ${EPG_STATE_FILE:-/data/state/.epg_trimmer_state}" in compose
+    assert "EPG_WORK_DIR: ${EPG_WORK_DIR:-/data/state/epg}" in compose
+    assert 'command: ["python", "-m", "app.epg_worker"]' in compose
+    assert "./published:/data/output:rw" in compose
+    assert "./output:/data/state:rw" in compose
+    assert "./published:/usr/share/nginx/html:ro" in static_compose

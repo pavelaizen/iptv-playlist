@@ -16,6 +16,7 @@ By default, this writes to a temporary file first and then atomically renames it
 Emby should reference only the stable final path/URL (`playlist_emby_clean.m3u`), never the `.tmp` file.
 
 > Note: `published/playlist_emby_clean.m3u` is generated output and is intentionally not committed.
+> The trimmed guide `published/epg.xml.gz` is also generated output and should not be committed.
 
 ## Stable HTTP URL via lightweight static server
 
@@ -28,6 +29,7 @@ docker compose -f docker-compose.playlist.yml up -d playlist-static
 Then point Emby to:
 
 - `http://<host>:8766/playlist_emby_clean.m3u`
+- `http://<host>:8766/epg.xml.gz`
 
 Keep this URL unchanged; updates happen in-place via atomic rename.
 
@@ -54,11 +56,29 @@ docker logs --tail 200 playlist-sanitizer
 
 The runtime emits cycle, retry, recovery, and publish events to container stdout. Per-channel logs use channel names plus short fingerprints so you can trace failures and recoveries without exposing raw IPTV URLs in logs.
 
+## EPG trimmer runtime
+
+For automated XMLTV guide trimming, run:
+
+```bash
+docker compose up -d --build epg-trimmer
+```
+
+The worker downloads `http://epg.one/epg2.xml.gz`, matches XMLTV channel display names against `published/playlist_emby_clean.m3u`, and writes the trimmed guide to `published/epg.xml.gz`. The existing static nginx container serves it at:
+
+- `http://<host>:8766/epg.xml.gz`
+
+By default, EPG trimming runs daily at `04:00` in the container timezone, after the playlist sanitizer's default `03:00` run. A missing `epg.xml.gz` triggers an immediate first run. A failed download, invalid XML, zero channel matches, or zero programmes preserves the previous EPG and skips Emby refresh.
+
+The worker refreshes Emby's guide only when the trimmed EPG content changes and Emby credentials are configured through `EMBY_BASE_URL` and `EMBY_API_KEY`.
+
 For Synology Container Manager, create the project from this Compose file and keep these host paths mounted:
 
 - `./original_playlist.m3u8` -> `/data/input/playlist.m3u` read-only
 - `./published` -> `/data/output` read-write
 - `./output` -> `/data/state` read-write
+
+The `epg-trimmer` service also uses `./published` -> `/data/output` and `./output` -> `/data/state`.
 
 To run unit tests:
 
