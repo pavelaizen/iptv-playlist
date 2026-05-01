@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app import main as app_main
 
@@ -121,10 +121,18 @@ def test_parse_full_check_time_accepts_hour_minute():
     assert app_main.parse_full_check_time("03:00") == (3, 0)
 
 
-def test_seconds_until_next_full_check_time_rolls_to_tomorrow():
+def test_seconds_until_next_full_check_time_rolls_to_tomorrow(monkeypatch):
+    monkeypatch.delenv("TZ", raising=False)
     now = datetime(2026, 4, 30, 3, 1, tzinfo=timezone.utc)
 
     assert app_main.seconds_until_next_full_check_time(now, (3, 0)) == 23 * 3600 + 59 * 60
+
+
+def test_seconds_until_next_full_check_time_uses_tz_dst_rules(monkeypatch):
+    monkeypatch.setenv("TZ", "Asia/Jerusalem")
+    now = datetime(2026, 3, 26, 4, 0, tzinfo=timezone(timedelta(hours=2)))
+
+    assert app_main.seconds_until_next_full_check_time(now, (3, 0)) == 22 * 3600
 
 
 def test_should_run_immediately_on_start_requires_state_and_clean_playlist(monkeypatch, tmp_path: Path):

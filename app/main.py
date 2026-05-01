@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.emby_client import refresh_livetv_after_publish
 from app.probe import ProbeSettings, ProbeTarget, probe_channels
@@ -88,14 +89,27 @@ def parse_full_check_time(raw_value: str) -> tuple[int, int]:
 
 def seconds_until_next_full_check_time(now: datetime, full_check_time: tuple[int, int]) -> float:
     hour, minute = full_check_time
+    local_now = now.astimezone(_scheduler_zoneinfo(now.tzinfo))
     target = datetime.combine(
-        now.date(),
+        local_now.date(),
         datetime_time(hour=hour, minute=minute),
-        tzinfo=now.tzinfo,
+        tzinfo=local_now.tzinfo,
     )
-    if target <= now:
+    if target <= local_now:
         target += timedelta(days=1)
-    return (target - now).total_seconds()
+    return target.timestamp() - local_now.timestamp()
+
+
+def _scheduler_zoneinfo(fallback_tzinfo):
+    timezone_name = os.getenv("TZ")
+    if not timezone_name:
+        return fallback_tzinfo
+
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        LOG.warning("invalid TZ=%r, using caller timezone", timezone_name)
+        return fallback_tzinfo
 
 
 def should_run_immediately_on_start() -> bool:
