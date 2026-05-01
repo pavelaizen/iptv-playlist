@@ -51,6 +51,36 @@ def test_extract_playlist_channel_names_reads_extinf_case_insensitively(tmp_path
     assert "provider.invalid" not in repr(names)
 
 
+def test_extract_playlist_channel_names_ignores_commas_inside_quoted_attrs(
+    tmp_path: Path,
+):
+    playlist = tmp_path / "playlist.m3u"
+    playlist.write_text(
+        "#EXTM3U\n"
+        '#EXTINF:-1 group-title="News, US",Channel One\n'
+        "http://provider.invalid/secret-token\n",
+        encoding="utf-8",
+    )
+
+    names = epg.extract_playlist_channel_names(playlist)
+
+    assert names == ["Channel One"]
+    assert "News, US" not in names
+    assert "provider.invalid" not in repr(names)
+
+
+def test_extract_playlist_channel_names_ignores_non_extinf_prefixes(tmp_path: Path):
+    playlist = tmp_path / "playlist.m3u"
+    playlist.write_text(
+        "#EXTM3U\n"
+        "#EXTINFRA:-1,Wrong\n"
+        "http://provider.invalid/secret-token\n",
+        encoding="utf-8",
+    )
+
+    assert epg.extract_playlist_channel_names(playlist) == []
+
+
 def test_normalize_channel_name_handles_case_punctuation_and_whitespace():
     assert epg.normalize_channel_name("  Кино-UHD!!  ") == epg.normalize_channel_name(
         "кино uhd"

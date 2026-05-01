@@ -44,14 +44,34 @@ def extract_playlist_channel_names(path: Path) -> list[str]:
     with path.open("r", encoding="utf-8") as fh:
         for line in fh:
             stripped = line.strip()
-            if not stripped.casefold().startswith("#extinf"):
+            if not _is_extinf_line(stripped):
                 continue
 
-            _, separator, name = stripped.partition(",")
-            if separator and name.strip():
+            name = _extract_extinf_name(stripped)
+            if name:
                 names.append(name.strip())
 
     return names
+
+
+def _is_extinf_line(value: str) -> bool:
+    lowered = value.casefold()
+    return lowered.startswith("#extinf:") or lowered.startswith("#extinf,")
+
+
+def _extract_extinf_name(value: str) -> str | None:
+    in_quotes = False
+
+    for index, char in enumerate(value):
+        if char == '"':
+            in_quotes = not in_quotes
+            continue
+
+        if char == "," and not in_quotes:
+            name = value[index + 1 :].strip()
+            return name or None
+
+    return None
 
 
 def trim_xmltv_to_playlist_channels(
