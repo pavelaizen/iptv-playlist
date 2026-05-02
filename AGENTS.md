@@ -35,7 +35,7 @@ Do not paste real playlist URL lines, provider hostnames, subscription tokens, o
 ## Data Files
 
 - `original_playlist.m3u8` - local source-of-truth raw Emby input playlist mounted by `docker-compose.yml`; do not commit real subscription material.
-- `published/playlist_emby_clean.m3u` - generated Emby-facing clean playlist served by nginx; do not commit it.
+- `published/playlist_emby_clean.m3u8` - generated Emby-facing clean playlist served by nginx; do not commit it.
 - `published/epg.xml` - generated trimmed XMLTV guide served by nginx; do not commit it.
 
 Treat the playlist files as subscription material, not examples to quote verbatim. The source-of-truth raw playlist is `original_playlist.m3u8`.
@@ -59,7 +59,7 @@ Generated playlist and EPG files under `published/` should stay out of commits.
 `python -m app.epg_worker` runs forever:
 
 1. Download `EPG_SOURCE_URL` to private state storage.
-2. Read `EPG_PLAYLIST_PATH`, normally `published/playlist_emby_clean.m3u`.
+2. Read `EPG_PLAYLIST_PATH`, normally `published/playlist_emby_clean.m3u8`.
 3. Match playlist channel names against XMLTV `<channel><display-name>`.
 4. Write a candidate plain XMLTV containing only matched channels and programmes.
 5. Reject zero-match or zero-programme candidates and preserve the previous EPG.
@@ -94,7 +94,7 @@ Read by `app/main.py`:
 - `LOG_LEVEL` default `INFO`
 - `RAW_PLAYLIST_PATH` default `/data/input/playlist.m3u`
 - `OUTPUT_DIR` default `/data/output`
-- `OUTPUT_PLAYLIST_NAME` default `playlist_clean.m3u`
+- `OUTPUT_PLAYLIST_NAME` default `playlist_clean.m3u8`
 - `PREVIOUS_CLEAN_PLAYLIST_NAME` default same as `OUTPUT_PLAYLIST_NAME`
 - `STATE_FILE` default `/data/output/.playlist_sanitizer_state`
 - `FULL_CHECK_TIME` default `03:00`, local container time for the daily full playlist scan
@@ -121,7 +121,7 @@ Read by `app/epg_worker.py`:
 - `LOG_LEVEL` default `INFO`
 - `EPG_SOURCE_URL` default `http://epg.one/epg2.xml.gz`
 - `EPG_RUN_TIME` default `04:00`, local container time for daily EPG trimming
-- `EPG_PLAYLIST_PATH` default `/data/output/playlist_emby_clean.m3u`
+- `EPG_PLAYLIST_PATH` default `/data/output/playlist_emby_clean.m3u8`
 - `EPG_OUTPUT_PATH` default `/data/output/epg.xml`
 - `EPG_STATE_FILE` default `/data/state/.epg_trimmer_state`
 - `EPG_WORK_DIR` default `/data/state/epg`
@@ -137,9 +137,9 @@ Read by `publish_emby_playlist.sh`:
 
 - `SRC_FILE` default `original_playlist.m3u8`
 - `PUBLISH_DIR` default `published`
-- `DEST_FILE_NAME` default `playlist_emby_clean.m3u`
+- `DEST_FILE_NAME` default `playlist_emby_clean.m3u8`
 
-Compose note: `docker-compose.yml` maps `./published` to `/data/output` so the sanitizer updates the same `playlist_emby_clean.m3u` file served by nginx. It maps `./output` to `/data/state` for healthcheck state and diagnostics, keeping diagnostics out of the public static directory.
+Compose note: `docker-compose.yml` maps `./published` to `/data/output` so the sanitizer updates the same `playlist_emby_clean.m3u8` file served by nginx. It maps `./output` to `/data/state` for healthcheck state and diagnostics, keeping diagnostics out of the public static directory.
 The EPG trimmer uses the same `./published` and `./output` mounts, publishes `epg.xml` into the static directory, and keeps downloaded/candidate EPG state under `./output`.
 
 ## Common Commands
@@ -183,7 +183,7 @@ Publish raw Emby playlist atomically:
 Count channels without printing playlist URLs:
 
 ```bash
-rg -c "^#EXTINF" playlist.m3u original_playlist.m3u8 playlist_smartone.m3u published/playlist_emby_clean.m3u
+rg -c "^#EXTINF" playlist.m3u original_playlist.m3u8 playlist_smartone.m3u published/playlist_emby_clean.m3u8
 ```
 
 Do not run the channel count command if those local playlist files are absent; they are runtime artifacts, not required tracked files.

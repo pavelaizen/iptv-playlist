@@ -5,6 +5,7 @@
 .venv-tools/
 published/*.tmp
 published/playlist_emby_clean.m3u
+published/playlist_emby_clean.m3u8
 __pycache__/
 *.py[cod]
 .pytest_cache/

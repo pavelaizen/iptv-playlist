@@ -22,7 +22,7 @@ services:
       # I/O settings
       RAW_PLAYLIST_PATH: ${RAW_PLAYLIST_PATH:-/data/input/playlist.m3u}
       OUTPUT_DIR: ${OUTPUT_DIR:-/data/output}
-      OUTPUT_PLAYLIST_NAME: ${OUTPUT_PLAYLIST_NAME:-playlist_emby_clean.m3u}
+      OUTPUT_PLAYLIST_NAME: ${OUTPUT_PLAYLIST_NAME:-playlist_emby_clean.m3u8}
       STATE_FILE: ${STATE_FILE:-/data/state/.playlist_sanitizer_state}
       DIAGNOSTICS_DIR: ${DIAGNOSTICS_DIR:-/data/state/diagnostics}
 
@@ -61,7 +61,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       EPG_SOURCE_URL: ${EPG_SOURCE_URL:-http://epg.one/epg2.xml.gz}
       EPG_RUN_TIME: ${EPG_RUN_TIME:-04:00}
-      EPG_PLAYLIST_PATH: ${EPG_PLAYLIST_PATH:-/data/output/playlist_emby_clean.m3u}
+      EPG_PLAYLIST_PATH: ${EPG_PLAYLIST_PATH:-/data/output/playlist_emby_clean.m3u8}
       EPG_OUTPUT_PATH: ${EPG_OUTPUT_PATH:-/data/output/epg.xml}
       EPG_STATE_FILE: ${EPG_STATE_FILE:-/data/state/.epg_trimmer_state}
       EPG_WORK_DIR: ${EPG_WORK_DIR:-/data/state/epg}

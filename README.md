@@ -10,12 +10,12 @@ Use the publisher script so the Emby-facing playlist is always written atomicall
 
 By default, this writes to a temporary file first and then atomically renames it:
 
-- temp: `published/playlist_emby_clean.m3u.tmp`
-- final: `published/playlist_emby_clean.m3u`
+- temp: `published/playlist_emby_clean.m3u8.tmp`
+- final: `published/playlist_emby_clean.m3u8`
 
-Emby should reference only the stable final path/URL (`playlist_emby_clean.m3u`), never the `.tmp` file.
+Emby should reference only the stable final path/URL (`playlist_emby_clean.m3u8`), never the `.tmp` file.
 
-> Note: `published/playlist_emby_clean.m3u` is generated output and is intentionally not committed.
+> Note: `published/playlist_emby_clean.m3u8` is generated output and is intentionally not committed.
 > The trimmed guide `published/epg.xml` is also generated output and should not be committed.
 
 ## Stable HTTP URL via lightweight static server
@@ -28,7 +28,7 @@ docker compose -f docker-compose.playlist.yml up -d playlist-static
 
 Then point Emby to:
 
-- `http://<host>:8766/playlist_emby_clean.m3u`
+- `http://<host>:8766/playlist_emby_clean.m3u8`
 - `http://<host>:8766/epg.xml`
 
 Keep this URL unchanged; updates happen in-place via atomic rename.
@@ -41,7 +41,7 @@ For automated probing and guarded publishing, run:
 docker compose up -d --build playlist-sanitizer
 ```
 
-The sanitizer now writes the guarded clean playlist directly to `published/playlist_emby_clean.m3u`, which is the same file served by the static nginx container. Runtime state and guard-failure diagnostics are stored under `output/` so they are not exposed by nginx.
+The sanitizer now writes the guarded clean playlist directly to `published/playlist_emby_clean.m3u8`, which is the same file served by the static nginx container. Runtime state and guard-failure diagnostics are stored under `output/` so they are not exposed by nginx.
 
 By default, full playlist checks run daily at `03:00` in the container timezone (`TZ=Asia/Jerusalem` in Compose). First deploy still runs immediately when no clean playlist/state exists. Recovery checks run after the full scan at the configured offsets, defaulting to `30,60,240` minutes.
 
@@ -64,7 +64,7 @@ For automated XMLTV guide trimming, run:
 docker compose up -d --build epg-trimmer
 ```
 
-The worker downloads `http://epg.one/epg2.xml.gz`, matches XMLTV channel display names against `published/playlist_emby_clean.m3u`, and writes the trimmed guide to `published/epg.xml`. The existing static nginx container serves it at:
+The worker downloads `http://epg.one/epg2.xml.gz`, matches XMLTV channel display names against `published/playlist_emby_clean.m3u8`, and writes the trimmed guide to `published/epg.xml`. The existing static nginx container serves it at:
 
 - `http://<host>:8766/epg.xml`
 
