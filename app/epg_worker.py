@@ -13,7 +13,11 @@ from pathlib import Path
 from urllib import request
 
 from app.emby_client import refresh_livetv_after_publish
-from app.epg import EpgTrimSummary, trim_xmltv_to_playlist_channels
+from app.epg import (
+    EpgTrimSummary,
+    trim_xmltv_to_playlist_channels,
+    trim_xmltv_to_playlist_channels_with_israeli_overrides,
+)
 
 
 LOG = logging.getLogger("epg-worker")
@@ -22,6 +26,9 @@ LOG = logging.getLogger("epg-worker")
 @dataclass(frozen=True)
 class EpgWorkerSettings:
     source_url: str
+    israel_primary_source_url: str
+    israel_fallback_source_url: str
+    israel_overrides_enabled: bool
     run_time: tuple[int, int]
     playlist_path: Path
     output_path: Path
@@ -34,6 +41,15 @@ class EpgWorkerSettings:
     def from_env(cls) -> "EpgWorkerSettings":
         return cls(
             source_url=os.getenv("EPG_SOURCE_URL", "http://epg.one/epg2.xml.gz"),
+            israel_primary_source_url=os.getenv(
+                "EPG_ISRAEL_PRIMARY_URL",
+                "https://iptvx.one/EPG",
+            ),
+            israel_fallback_source_url=os.getenv(
+                "EPG_ISRAEL_FALLBACK_URL",
+                "https://iptv-epg.org/files/epg-il.xml.gz",
+            ),
+            israel_overrides_enabled=_env_bool("EPG_ISRAEL_OVERRIDES_ENABLED", True),
             run_time=parse_run_time(os.getenv("EPG_RUN_TIME", "04:00")),
             playlist_path=Path(
                 os.getenv("EPG_PLAYLIST_PATH", "/data/output/playlist_emby_clean.m3u8")
@@ -162,14 +178,27 @@ def run_once(settings: EpgWorkerSettings | None = None) -> bool:
 
     settings.work_dir.mkdir(parents=True, exist_ok=True)
     source_path = settings.work_dir / "source.xml.gz"
+    israel_primary_source_path = settings.work_dir / "source_israel_primary.xml.gz"
+    israel_fallback_source_path = settings.work_dir / "source_israel_fallback.xml.gz"
     candidate_path = settings.work_dir / "candidate.xml"
 
     download_epg(settings.source_url, source_path)
-    summary = trim_xmltv_to_playlist_channels(
-        source_xmltv_gz_path=source_path,
-        playlist_path=settings.playlist_path,
-        output_xmltv_path=candidate_path,
-    )
+    if settings.israel_overrides_enabled:
+        download_epg(settings.israel_primary_source_url, israel_primary_source_path)
+        download_epg(settings.israel_fallback_source_url, israel_fallback_source_path)
+        summary = trim_xmltv_to_playlist_channels_with_israeli_overrides(
+            default_source_xmltv_gz_path=source_path,
+            israel_primary_source_xmltv_gz_path=israel_primary_source_path,
+            israel_fallback_source_xmltv_gz_path=israel_fallback_source_path,
+            playlist_path=settings.playlist_path,
+            output_xmltv_path=candidate_path,
+        )
+    else:
+        summary = trim_xmltv_to_playlist_channels(
+            source_xmltv_gz_path=source_path,
+            playlist_path=settings.playlist_path,
+            output_xmltv_path=candidate_path,
+        )
     return publish_candidate(candidate_path, settings, summary)
 
 
@@ -247,6 +276,21 @@ def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
         return default
 
     return value
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    normalized = raw_value.strip().casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+
+    LOG.warning("Invalid %s=%r; falling back to %s", name, raw_value, default)
+    return default
 
 
 logging.basicConfig(

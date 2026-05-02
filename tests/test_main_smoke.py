@@ -57,6 +57,53 @@ def test_build_candidate_playlist_does_not_duplicate_m3u_header(tmp_path: Path):
     assert output.count("#EXTM3U") == 1
 
 
+def test_build_candidate_playlist_adds_israeli_tvg_id_overrides(tmp_path: Path):
+    raw = tmp_path / "raw.m3u"
+    raw.write_text(
+        "#EXTM3U\n"
+        '#EXTINF:0 tvg-rec="3",Channel 9 FHD IL\n'
+        "http://ok1\n"
+        '#EXTINF:0 tvg-rec="3",Kan 11 HD IL\n'
+        "http://ok2\n"
+        '#EXTINF:0 tvg-rec="3",Keshet 12 FHD IL\n'
+        "http://ok3\n"
+        '#EXTINF:0 tvg-rec="3",Reshet 13 HD IL\n'
+        "http://ok4\n"
+        '#EXTINF:0 tvg-rec="0",Channel 14 FHD IL\n'
+        "http://ok5\n",
+        encoding="utf-8",
+    )
+
+    entries = app_main.parse_m3u(raw)
+    output = app_main.build_candidate_playlist(
+        entries,
+        {"http://ok1", "http://ok2", "http://ok3", "http://ok4", "http://ok5"},
+    )
+
+    assert 'Channel 9 FHD IL' in output
+    assert 'tvg-id="9kanal-israel"' in output
+    assert 'tvg-id="channel-11-il"' in output
+    assert 'tvg-id="channel-12-il"' in output
+    assert 'tvg-id="channel-13-il"' in output
+    assert 'tvg-id="ערוץ14.il"' in output
+
+
+def test_build_candidate_playlist_replaces_existing_tvg_id_for_override_channels(tmp_path: Path):
+    raw = tmp_path / "raw.m3u"
+    raw.write_text(
+        "#EXTM3U\n"
+        '#EXTINF:0 tvg-id="wrong-id" tvg-rec="3",Keshet 12 HD IL\n'
+        "http://ok\n",
+        encoding="utf-8",
+    )
+
+    entries = app_main.parse_m3u(raw)
+    output = app_main.build_candidate_playlist(entries, {"http://ok"})
+
+    assert 'tvg-id="wrong-id"' not in output
+    assert 'tvg-id="channel-12-il"' in output
+
+
 def test_publish_candidate_does_not_update_state_when_guard_rejects(monkeypatch, tmp_path: Path):
     out_dir = tmp_path / "out"
     state_file = out_dir / ".state"

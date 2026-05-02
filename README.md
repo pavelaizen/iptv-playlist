@@ -64,7 +64,7 @@ For automated XMLTV guide trimming, run:
 docker compose up -d --build epg-trimmer
 ```
 
-The worker downloads `http://epg.one/epg2.xml.gz`, matches XMLTV channel display names against `published/playlist_emby_clean.m3u8`, and writes the trimmed guide to `published/epg.xml`. The existing static nginx container serves it at:
+The worker downloads `EPG_SOURCE_URL` (default `http://epg.one/epg2.xml.gz`) for general matching, and when Israeli overrides are enabled it also downloads `EPG_ISRAEL_PRIMARY_URL` (default `https://iptvx.one/EPG`) plus `EPG_ISRAEL_FALLBACK_URL` (default `https://iptv-epg.org/files/epg-il.xml.gz`) for explicit Israeli channel-id mapping with fallback. It writes the trimmed guide to `published/epg.xml`. The existing static nginx container serves it at:
 
 - `http://<host>:8766/epg.xml`
 
