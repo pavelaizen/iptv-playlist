@@ -45,6 +45,9 @@ class _BytesResponse(io.BytesIO):
 def settings_for(tmp_path: Path) -> epg_worker.EpgWorkerSettings:
     return epg_worker.EpgWorkerSettings(
         source_url="http://example.invalid/epg.xml.gz",
+        israel_primary_source_url="http://example.invalid/israel-primary.xml.gz",
+        israel_fallback_source_url="http://example.invalid/israel-fallback.xml.gz",
+        israel_overrides_enabled=True,
         run_time=(4, 0),
         playlist_path=tmp_path / "playlist.m3u",
         output_path=tmp_path / "published" / "epg.xml",
@@ -85,6 +88,196 @@ def test_settings_from_env_rejects_negative_guard_values(monkeypatch):
 
     assert settings.min_matched_channels == 1
     assert settings.min_programmes == 1
+
+
+def test_settings_from_env_parses_israeli_override_flag(monkeypatch):
+    monkeypatch.setenv("EPG_ISRAEL_OVERRIDES_ENABLED", "0")
+
+    settings = epg_worker.EpgWorkerSettings.from_env()
+
+    assert settings.israel_overrides_enabled is False
+
+
+def test_run_once_uses_single_source_trim_when_israeli_overrides_disabled(
+    tmp_path: Path,
+    monkeypatch,
+):
+    settings = settings_for(tmp_path)
+    settings.playlist_path.write_text(
+        "#EXTM3U\n#EXTINF:-1,Channel One\nhttp://provider.invalid/one\n",
+        encoding="utf-8",
+    )
+    settings = epg_worker.EpgWorkerSettings(
+        source_url=settings.source_url,
+        israel_primary_source_url=settings.israel_primary_source_url,
+        israel_fallback_source_url=settings.israel_fallback_source_url,
+        israel_overrides_enabled=False,
+        run_time=settings.run_time,
+        playlist_path=settings.playlist_path,
+        output_path=settings.output_path,
+        state_file=settings.state_file,
+        work_dir=settings.work_dir,
+        min_matched_channels=settings.min_matched_channels,
+        min_programmes=settings.min_programmes,
+    )
+
+    calls = {"download": [], "single": 0, "override": 0}
+
+    def fake_download(source_url: str, destination: Path):
+        calls["download"].append((source_url, destination.name))
+        write_gzip(destination, "<tv></tv>")
+
+    def fake_single_trim(*, source_xmltv_gz_path, playlist_path, output_xmltv_path):
+        calls["single"] += 1
+        output_xmltv_path.write_text(
+            "<tv><channel id='one'/><programme channel='one'/></tv>",
+            encoding="utf-8",
+        )
+        return epg.EpgTrimSummary(
+            playlist_channel_count=1,
+            source_channel_count=1,
+            matched_channel_count=1,
+            programme_count=1,
+            unmatched_playlist_names=(),
+        )
+
+    def fake_override_trim(**kwargs):
+        calls["override"] += 1
+        raise AssertionError("override trim should not be called")
+
+    monkeypatch.setattr(epg_worker, "download_epg", fake_download)
+    monkeypatch.setattr(epg_worker, "trim_xmltv_to_playlist_channels", fake_single_trim)
+    monkeypatch.setattr(
+        epg_worker,
+        "trim_xmltv_to_playlist_channels_with_israeli_overrides",
+        fake_override_trim,
+    )
+    monkeypatch.setattr(
+        epg_worker,
+        "refresh_livetv_after_publish",
+        lambda log: None,  # noqa: ARG005
+    )
+
+    assert epg_worker.run_once(settings) is True
+    assert calls["single"] == 1
+    assert calls["override"] == 0
+    assert calls["download"] == [("http://example.invalid/epg.xml.gz", "source.xml.gz")]
+
+
+def test_run_once_uses_dual_source_trim_when_israeli_overrides_enabled(
+    tmp_path: Path,
+    monkeypatch,
+):
+    settings = settings_for(tmp_path)
+    settings.playlist_path.write_text(
+        "#EXTM3U\n#EXTINF:-1,Kan 11 HD IL\nhttp://provider.invalid/kan11\n",
+        encoding="utf-8",
+    )
+
+    calls = {"download": [], "single": 0, "override": 0}
+
+    def fake_download(source_url: str, destination: Path):
+        calls["download"].append((source_url, destination.name))
+        write_gzip(destination, "<tv></tv>")
+
+    def fake_single_trim(*, source_xmltv_gz_path, playlist_path, output_xmltv_path):  # noqa: ARG001
+        calls["single"] += 1
+        raise AssertionError("single-source trim should not be called")
+
+    def fake_override_trim(**kwargs):
+        calls["override"] += 1
+        kwargs["output_xmltv_path"].write_text(
+            "<tv><channel id='kan11'/><programme channel='kan11'/></tv>",
+            encoding="utf-8",
+        )
+        return epg.EpgTrimSummary(
+            playlist_channel_count=1,
+            source_channel_count=3,
+            matched_channel_count=1,
+            programme_count=1,
+            unmatched_playlist_names=(),
+        )
+
+    monkeypatch.setattr(epg_worker, "download_epg", fake_download)
+    monkeypatch.setattr(epg_worker, "trim_xmltv_to_playlist_channels", fake_single_trim)
+    monkeypatch.setattr(
+        epg_worker,
+        "trim_xmltv_to_playlist_channels_with_israeli_overrides",
+        fake_override_trim,
+    )
+    monkeypatch.setattr(
+        epg_worker,
+        "refresh_livetv_after_publish",
+        lambda log: None,  # noqa: ARG005
+    )
+
+    assert epg_worker.run_once(settings) is True
+    assert calls["single"] == 0
+    assert calls["override"] == 1
+    assert calls["download"] == [
+        ("http://example.invalid/epg.xml.gz", "source.xml.gz"),
+        ("http://example.invalid/israel-primary.xml.gz", "source_israel_primary.xml.gz"),
+        ("http://example.invalid/israel-fallback.xml.gz", "source_israel_fallback.xml.gz"),
+    ]
+
+
+def test_run_once_falls_back_to_single_source_when_israeli_source_download_fails(
+    tmp_path: Path,
+    monkeypatch,
+):
+    settings = settings_for(tmp_path)
+    settings.playlist_path.write_text(
+        "#EXTM3U\n#EXTINF:-1,Kan 11 HD IL\nhttp://provider.invalid/kan11\n",
+        encoding="utf-8",
+    )
+
+    calls = {"download": [], "single": 0, "override": 0}
+
+    def fake_download(source_url: str, destination: Path):
+        calls["download"].append((source_url, destination.name))
+        if source_url.endswith("israel-fallback.xml.gz"):
+            raise OSError("source down")
+        write_gzip(destination, "<tv></tv>")
+
+    def fake_single_trim(*, source_xmltv_gz_path, playlist_path, output_xmltv_path):  # noqa: ARG001
+        calls["single"] += 1
+        output_xmltv_path.write_text(
+            "<tv><channel id='one'/><programme channel='one'/></tv>",
+            encoding="utf-8",
+        )
+        return epg.EpgTrimSummary(
+            playlist_channel_count=1,
+            source_channel_count=1,
+            matched_channel_count=1,
+            programme_count=1,
+            unmatched_playlist_names=(),
+        )
+
+    def fake_override_trim(**kwargs):  # noqa: ARG001
+        calls["override"] += 1
+        raise AssertionError("override trim should not run when Israeli download fails")
+
+    monkeypatch.setattr(epg_worker, "download_epg", fake_download)
+    monkeypatch.setattr(epg_worker, "trim_xmltv_to_playlist_channels", fake_single_trim)
+    monkeypatch.setattr(
+        epg_worker,
+        "trim_xmltv_to_playlist_channels_with_israeli_overrides",
+        fake_override_trim,
+    )
+    monkeypatch.setattr(
+        epg_worker,
+        "refresh_livetv_after_publish",
+        lambda log: None,  # noqa: ARG005
+    )
+
+    assert epg_worker.run_once(settings) is True
+    assert calls["single"] == 1
+    assert calls["override"] == 0
+    assert calls["download"] == [
+        ("http://example.invalid/epg.xml.gz", "source.xml.gz"),
+        ("http://example.invalid/israel-primary.xml.gz", "source_israel_primary.xml.gz"),
+        ("http://example.invalid/israel-fallback.xml.gz", "source_israel_fallback.xml.gz"),
+    ]
 
 
 def test_main_schedules_with_local_aware_time(tmp_path: Path, monkeypatch):

@@ -227,3 +227,69 @@ def test_trim_xmltv_does_not_build_elementtree_for_programmes(
     ]
     assert summary.matched_channel_count == 1
     assert summary.programme_count == 1
+
+
+def test_trim_xmltv_with_israeli_overrides_uses_primary_and_fallback_sources(
+    tmp_path: Path,
+):
+    playlist = tmp_path / "playlist.m3u"
+    playlist.write_text(
+        "#EXTM3U\n"
+        "#EXTINF:-1,Channel One\n"
+        "http://provider.invalid/one\n"
+        "#EXTINF:-1,Kan 11 HD IL\n"
+        "http://provider.invalid/kan11\n"
+        "#EXTINF:-1,Keshet 12 HD IL\n"
+        "http://provider.invalid/keshet12\n"
+        "#EXTINF:-1,Channel 14 FHD IL\n"
+        "http://provider.invalid/ch14\n",
+        encoding="utf-8",
+    )
+    default_source = tmp_path / "default.xml.gz"
+    israel_primary_source = tmp_path / "primary.xml.gz"
+    israel_fallback_source = tmp_path / "fallback.xml.gz"
+    output = tmp_path / "epg.xml"
+
+    write_gzip(
+        default_source,
+        "<tv>"
+        "  <channel id='one'><display-name>Channel One</display-name></channel>"
+        "  <programme channel='one'><title>One</title></programme>"
+        "</tv>",
+    )
+    write_gzip(
+        israel_primary_source,
+        "<tv>"
+        "  <channel id='channel-11-il'><display-name>Channel 11 [IL]</display-name></channel>"
+        "  <channel id='channel-12-il'><display-name>Channel 12 [IL]</display-name></channel>"
+        "  <programme channel='channel-12-il'><title>Keshet</title></programme>"
+        "</tv>",
+    )
+    write_gzip(
+        israel_fallback_source,
+        "<tv>"
+        "  <channel id='כאן11.il'><display-name>IL - כאן 11</display-name></channel>"
+        "  <channel id='ערוץ14.il'><display-name>IL - ערוץ 14</display-name></channel>"
+        "  <programme channel='כאן11.il'><title>Kan Fallback</title></programme>"
+        "  <programme channel='ערוץ14.il'><title>Ch14</title></programme>"
+        "</tv>",
+    )
+
+    summary = epg.trim_xmltv_to_playlist_channels_with_israeli_overrides(
+        default_source_xmltv_gz_path=default_source,
+        israel_primary_source_xmltv_gz_path=israel_primary_source,
+        israel_fallback_source_xmltv_gz_path=israel_fallback_source,
+        playlist_path=playlist,
+        output_xmltv_path=output,
+    )
+
+    root = ET.fromstring(read_text(output))
+    channel_ids = [channel.attrib["id"] for channel in root.findall("channel")]
+    programme_ids = [programme.attrib["channel"] for programme in root.findall("programme")]
+
+    assert channel_ids == ["one", "channel-12-il", "כאן11.il", "ערוץ14.il"]
+    assert programme_ids == ["one", "channel-12-il", "כאן11.il", "ערוץ14.il"]
+    assert summary.playlist_channel_count == 4
+    assert summary.matched_channel_count == 4
+    assert summary.programme_count == 4
+    assert summary.unmatched_playlist_names == ()

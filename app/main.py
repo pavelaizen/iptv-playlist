@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, time as datetime_time, timedelta, timezone
@@ -34,6 +35,30 @@ MIN_VALID_CHANNELS_ABSOLUTE = int(os.getenv("MIN_VALID_CHANNELS_ABSOLUTE", "1"))
 MIN_VALID_RATIO_OF_PREVIOUS = float(os.getenv("MIN_VALID_RATIO_OF_PREVIOUS", "0.7"))
 EXTRA_RUN_DELAYS_MINUTES_RAW = os.getenv("EXTRA_RUN_DELAYS_MINUTES", "30,60,240")
 FULL_CHECK_TIME = os.getenv("FULL_CHECK_TIME", "03:00")
+
+
+def _normalize_channel_name_for_tvg_id(value: str) -> str:
+    words: list[str] = []
+    current: list[str] = []
+    for char in value.casefold():
+        if char.isalnum():
+            current.append(char)
+        elif current:
+            words.append("".join(current))
+            current.clear()
+    if current:
+        words.append("".join(current))
+    return " ".join(words)
+
+
+_TVG_ID_OVERRIDES_BY_CHANNEL_NAME = {
+    _normalize_channel_name_for_tvg_id("Channel 9 FHD IL"): "9kanal-israel",
+    _normalize_channel_name_for_tvg_id("Kan 11 HD IL"): "channel-11-il",
+    _normalize_channel_name_for_tvg_id("Keshet 12 HD IL"): "channel-12-il",
+    _normalize_channel_name_for_tvg_id("Keshet 12 FHD IL"): "channel-12-il",
+    _normalize_channel_name_for_tvg_id("Reshet 13 HD IL"): "channel-13-il",
+    _normalize_channel_name_for_tvg_id("Channel 14 FHD IL"): "ערוץ14.il",
+}
 
 
 @dataclass(slots=True)
@@ -143,9 +168,51 @@ def build_candidate_playlist(entries: list[tuple[list[str], str]], valid_urls: s
         stripped = url.strip()
         if stripped not in valid_urls:
             continue
-        out_lines.extend(meta)
+        out_lines.extend(_apply_tvg_id_overrides(meta))
         out_lines.append(url)
     return "\n".join(out_lines) + "\n"
+
+
+def _apply_tvg_id_overrides(metadata_lines: list[str]) -> list[str]:
+    channel_name = extract_channel_name(metadata_lines)
+    normalized_name = _normalize_channel_name_for_tvg_id(channel_name)
+    tvg_id = _TVG_ID_OVERRIDES_BY_CHANNEL_NAME.get(normalized_name)
+    if tvg_id is None:
+        return metadata_lines
+
+    updated = metadata_lines[:]
+    for index in range(len(updated) - 1, -1, -1):
+        if updated[index].strip().upper().startswith("#EXTINF"):
+            updated[index] = _set_tvg_id_on_extinf_line(updated[index], tvg_id)
+            break
+    return updated
+
+
+def _set_tvg_id_on_extinf_line(line: str, tvg_id: str) -> str:
+    prefix, separator, suffix = _split_extinf_line_at_name_separator(line)
+    if not separator:
+        return line
+
+    prefix_without_tvg_id = re.sub(
+        r'\s+tvg-id="[^"]*"',
+        "",
+        prefix,
+        flags=re.IGNORECASE,
+    )
+    return f'{prefix_without_tvg_id} tvg-id="{tvg_id}",{suffix}'
+
+
+def _split_extinf_line_at_name_separator(line: str) -> tuple[str, str, str]:
+    in_quotes = False
+
+    for index, char in enumerate(line):
+        if char == '"':
+            in_quotes = not in_quotes
+            continue
+        if char == "," and not in_quotes:
+            return line[:index], ",", line[index + 1 :]
+
+    return line, "", ""
 
 
 def extract_channel_name(metadata_lines: list[str]) -> str:

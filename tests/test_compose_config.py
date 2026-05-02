@@ -36,6 +36,9 @@ def test_epg_trimmer_writes_epg_served_by_static_container():
     assert "container_name: epg-trimmer" in compose
     assert "EPG_RUN_TIME: ${EPG_RUN_TIME:-04:00}" in compose
     assert "EPG_SOURCE_URL: ${EPG_SOURCE_URL:-http://epg.one/epg2.xml.gz}" in compose
+    assert "EPG_ISRAEL_PRIMARY_URL: ${EPG_ISRAEL_PRIMARY_URL:-https://iptvx.one/EPG}" in compose
+    assert "EPG_ISRAEL_FALLBACK_URL: ${EPG_ISRAEL_FALLBACK_URL:-https://iptv-epg.org/files/epg-il.xml.gz}" in compose
+    assert "EPG_ISRAEL_OVERRIDES_ENABLED: ${EPG_ISRAEL_OVERRIDES_ENABLED:-1}" in compose
     assert "EPG_PLAYLIST_PATH: ${EPG_PLAYLIST_PATH:-/data/output/playlist_emby_clean.m3u8}" in compose
     assert "EPG_OUTPUT_PATH: ${EPG_OUTPUT_PATH:-/data/output/epg.xml}" in compose
     assert "EPG_STATE_FILE: ${EPG_STATE_FILE:-/data/state/.epg_trimmer_state}" in compose

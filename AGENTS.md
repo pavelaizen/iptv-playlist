@@ -59,13 +59,14 @@ Generated playlist and EPG files under `published/` should stay out of commits.
 `python -m app.epg_worker` runs forever:
 
 1. Download `EPG_SOURCE_URL` to private state storage.
-2. Read `EPG_PLAYLIST_PATH`, normally `published/playlist_emby_clean.m3u8`.
-3. Match playlist channel names against XMLTV `<channel><display-name>`.
-4. Write a candidate plain XMLTV containing only matched channels and programmes.
-5. Reject zero-match or zero-programme candidates and preserve the previous EPG.
-6. Atomically publish changed output to `EPG_OUTPUT_PATH`, normally `published/epg.xml`.
-7. Refresh Emby only after changed successful output.
-8. Sleep until the next configured local-container `EPG_RUN_TIME`.
+2. When Israeli overrides are enabled, also download `EPG_ISRAEL_PRIMARY_URL` and `EPG_ISRAEL_FALLBACK_URL`.
+3. Read `EPG_PLAYLIST_PATH`, normally `published/playlist_emby_clean.m3u8`.
+4. Match playlist channel names against XMLTV `<channel><display-name>` for general channels, and apply Israeli channel-id overrides by explicit mapping with fallback.
+5. Write a candidate plain XMLTV containing only matched channels and programmes.
+6. Reject zero-match or zero-programme candidates and preserve the previous EPG.
+7. Atomically publish changed output to `EPG_OUTPUT_PATH`, normally `published/epg.xml`.
+8. Refresh Emby only after changed successful output.
+9. Sleep until the next configured local-container `EPG_RUN_TIME`.
 
 ## Publish Guard Semantics
 
@@ -120,6 +121,9 @@ Read by `app/epg_worker.py`:
 
 - `LOG_LEVEL` default `INFO`
 - `EPG_SOURCE_URL` default `http://epg.one/epg2.xml.gz`
+- `EPG_ISRAEL_PRIMARY_URL` default `https://iptvx.one/EPG`
+- `EPG_ISRAEL_FALLBACK_URL` default `https://iptv-epg.org/files/epg-il.xml.gz`
+- `EPG_ISRAEL_OVERRIDES_ENABLED` default `1`
 - `EPG_RUN_TIME` default `04:00`, local container time for daily EPG trimming
 - `EPG_PLAYLIST_PATH` default `/data/output/playlist_emby_clean.m3u8`
 - `EPG_OUTPUT_PATH` default `/data/output/epg.xml`
