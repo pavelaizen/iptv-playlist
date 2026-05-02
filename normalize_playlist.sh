@@ -60,6 +60,8 @@ def clean_name(name):
     # Remove leading/trailing non-printable or weird punctuation
     name = re.sub(r'^[\|\-\*\#\s]+', '', name)
     name = re.sub(r'[\|\-\*\#\s]+$', '', name)
+    # Replace double quotes to avoid breaking EXTINF attribute quoting
+    name = name.replace('"', "'")
     return name.strip()
 
 # ---------------------------------------------------------------------------
