@@ -184,15 +184,41 @@ def run_once(settings: EpgWorkerSettings | None = None) -> bool:
 
     download_epg(settings.source_url, source_path)
     if settings.israel_overrides_enabled:
-        download_epg(settings.israel_primary_source_url, israel_primary_source_path)
-        download_epg(settings.israel_fallback_source_url, israel_fallback_source_path)
-        summary = trim_xmltv_to_playlist_channels_with_israeli_overrides(
-            default_source_xmltv_gz_path=source_path,
-            israel_primary_source_xmltv_gz_path=israel_primary_source_path,
-            israel_fallback_source_xmltv_gz_path=israel_fallback_source_path,
-            playlist_path=settings.playlist_path,
-            output_xmltv_path=candidate_path,
-        )
+        israel_sources_ready = True
+        try:
+            download_epg(settings.israel_primary_source_url, israel_primary_source_path)
+        except Exception as exc:  # noqa: BLE001 - degrade to single-source trim
+            israel_sources_ready = False
+            LOG.warning(
+                "Failed to download Israeli primary EPG source %s: %s; falling back to single-source trim",
+                settings.israel_primary_source_url,
+                exc,
+            )
+
+        try:
+            download_epg(settings.israel_fallback_source_url, israel_fallback_source_path)
+        except Exception as exc:  # noqa: BLE001 - degrade to single-source trim
+            israel_sources_ready = False
+            LOG.warning(
+                "Failed to download Israeli fallback EPG source %s: %s; falling back to single-source trim",
+                settings.israel_fallback_source_url,
+                exc,
+            )
+
+        if israel_sources_ready:
+            summary = trim_xmltv_to_playlist_channels_with_israeli_overrides(
+                default_source_xmltv_gz_path=source_path,
+                israel_primary_source_xmltv_gz_path=israel_primary_source_path,
+                israel_fallback_source_xmltv_gz_path=israel_fallback_source_path,
+                playlist_path=settings.playlist_path,
+                output_xmltv_path=candidate_path,
+            )
+        else:
+            summary = trim_xmltv_to_playlist_channels(
+                source_xmltv_gz_path=source_path,
+                playlist_path=settings.playlist_path,
+                output_xmltv_path=candidate_path,
+            )
     else:
         summary = trim_xmltv_to_playlist_channels(
             source_xmltv_gz_path=source_path,

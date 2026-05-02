@@ -221,6 +221,65 @@ def test_run_once_uses_dual_source_trim_when_israeli_overrides_enabled(
     ]
 
 
+def test_run_once_falls_back_to_single_source_when_israeli_source_download_fails(
+    tmp_path: Path,
+    monkeypatch,
+):
+    settings = settings_for(tmp_path)
+    settings.playlist_path.write_text(
+        "#EXTM3U\n#EXTINF:-1,Kan 11 HD IL\nhttp://provider.invalid/kan11\n",
+        encoding="utf-8",
+    )
+
+    calls = {"download": [], "single": 0, "override": 0}
+
+    def fake_download(source_url: str, destination: Path):
+        calls["download"].append((source_url, destination.name))
+        if source_url.endswith("israel-fallback.xml.gz"):
+            raise OSError("source down")
+        write_gzip(destination, "<tv></tv>")
+
+    def fake_single_trim(*, source_xmltv_gz_path, playlist_path, output_xmltv_path):  # noqa: ARG001
+        calls["single"] += 1
+        output_xmltv_path.write_text(
+            "<tv><channel id='one'/><programme channel='one'/></tv>",
+            encoding="utf-8",
+        )
+        return epg.EpgTrimSummary(
+            playlist_channel_count=1,
+            source_channel_count=1,
+            matched_channel_count=1,
+            programme_count=1,
+            unmatched_playlist_names=(),
+        )
+
+    def fake_override_trim(**kwargs):  # noqa: ARG001
+        calls["override"] += 1
+        raise AssertionError("override trim should not run when Israeli download fails")
+
+    monkeypatch.setattr(epg_worker, "download_epg", fake_download)
+    monkeypatch.setattr(epg_worker, "trim_xmltv_to_playlist_channels", fake_single_trim)
+    monkeypatch.setattr(
+        epg_worker,
+        "trim_xmltv_to_playlist_channels_with_israeli_overrides",
+        fake_override_trim,
+    )
+    monkeypatch.setattr(
+        epg_worker,
+        "refresh_livetv_after_publish",
+        lambda log: None,  # noqa: ARG005
+    )
+
+    assert epg_worker.run_once(settings) is True
+    assert calls["single"] == 1
+    assert calls["override"] == 0
+    assert calls["download"] == [
+        ("http://example.invalid/epg.xml.gz", "source.xml.gz"),
+        ("http://example.invalid/israel-primary.xml.gz", "source_israel_primary.xml.gz"),
+        ("http://example.invalid/israel-fallback.xml.gz", "source_israel_fallback.xml.gz"),
+    ]
+
+
 def test_main_schedules_with_local_aware_time(tmp_path: Path, monkeypatch):
     class StopScheduler(Exception):
         pass

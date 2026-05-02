@@ -104,6 +104,17 @@ def test_build_candidate_playlist_replaces_existing_tvg_id_for_override_channels
     assert 'tvg-id="channel-12-il"' in output
 
 
+def test_set_tvg_id_on_extinf_line_preserves_commas_inside_quoted_attrs():
+    extinf = '#EXTINF:-1 group-title="News, US" tvg-name="A, B",Channel One'
+
+    updated = app_main._set_tvg_id_on_extinf_line(extinf, "channel-one")
+
+    assert updated == (
+        '#EXTINF:-1 group-title="News, US" tvg-name="A, B" '
+        'tvg-id="channel-one",Channel One'
+    )
+
+
 def test_publish_candidate_does_not_update_state_when_guard_rejects(monkeypatch, tmp_path: Path):
     out_dir = tmp_path / "out"
     state_file = out_dir / ".state"

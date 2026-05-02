@@ -189,7 +189,7 @@ def _apply_tvg_id_overrides(metadata_lines: list[str]) -> list[str]:
 
 
 def _set_tvg_id_on_extinf_line(line: str, tvg_id: str) -> str:
-    prefix, separator, suffix = line.partition(",")
+    prefix, separator, suffix = _split_extinf_line_at_name_separator(line)
     if not separator:
         return line
 
@@ -200,6 +200,19 @@ def _set_tvg_id_on_extinf_line(line: str, tvg_id: str) -> str:
         flags=re.IGNORECASE,
     )
     return f'{prefix_without_tvg_id} tvg-id="{tvg_id}",{suffix}'
+
+
+def _split_extinf_line_at_name_separator(line: str) -> tuple[str, str, str]:
+    in_quotes = False
+
+    for index, char in enumerate(line):
+        if char == '"':
+            in_quotes = not in_quotes
+            continue
+        if char == "," and not in_quotes:
+            return line[:index], ",", line[index + 1 :]
+
+    return line, "", ""
 
 
 def extract_channel_name(metadata_lines: list[str]) -> str:
