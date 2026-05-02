@@ -15,7 +15,7 @@ Do not store credentials in the repo, skill, or shell history. Ask the user for 
 - `EMBY_API_KEY`
 - Playlist URL that Emby itself can reach
 
-When Emby and the static playlist server run on the same host, prefer `http://127.0.0.1:8766/playlist_emby_clean.m3u` over the LAN IP. Verify the static server first instead of assuming it is up.
+When Emby and the static playlist server run on the same host, prefer `http://127.0.0.1:8766/playlist_emby_clean.m3u8` over the LAN IP. Verify the static server first instead of assuming it is up.
 
 ## Workflow
 
@@ -24,7 +24,7 @@ When Emby and the static playlist server run on the same host, prefer `http://12
 ```bash
 ./publish_emby_playlist.sh
 docker compose -f docker-compose.playlist.yml up -d playlist-static
-curl -I http://127.0.0.1:8766/playlist_emby_clean.m3u
+curl -I http://127.0.0.1:8766/playlist_emby_clean.m3u8
 ```
 
 2. Read Emby Live TV state before changing anything:
@@ -47,7 +47,7 @@ PY
 3. If the M3U tuner host is missing, add it with the playlist URL Emby can reach:
 
 ```bash
-PLAYLIST_URL='http://127.0.0.1:8766/playlist_emby_clean.m3u'
+PLAYLIST_URL='http://127.0.0.1:8766/playlist_emby_clean.m3u8'
 python - <<'PY'
 import json, os, urllib.request
 base = os.environ["EMBY_BASE_URL"].rstrip("/")

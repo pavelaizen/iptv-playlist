@@ -3,7 +3,7 @@ set -euo pipefail
 
 SRC_FILE="${SRC_FILE:-original_playlist.m3u8}"
 PUBLISH_DIR="${PUBLISH_DIR:-published}"
-DEST_FILE_NAME="${DEST_FILE_NAME:-playlist_emby_clean.m3u}"
+DEST_FILE_NAME="${DEST_FILE_NAME:-playlist_emby_clean.m3u8}"
 DEST_FILE="${PUBLISH_DIR}/${DEST_FILE_NAME}"
 TMP_FILE="${DEST_FILE}.tmp"
 

@@ -36,7 +36,7 @@ class EpgWorkerSettings:
             source_url=os.getenv("EPG_SOURCE_URL", "http://epg.one/epg2.xml.gz"),
             run_time=parse_run_time(os.getenv("EPG_RUN_TIME", "04:00")),
             playlist_path=Path(
-                os.getenv("EPG_PLAYLIST_PATH", "/data/output/playlist_emby_clean.m3u")
+                os.getenv("EPG_PLAYLIST_PATH", "/data/output/playlist_emby_clean.m3u8")
             ),
             output_path=Path(os.getenv("EPG_OUTPUT_PATH", "/data/output/epg.xml")),
             state_file=Path(

@@ -26,7 +26,7 @@ LOG = logging.getLogger("playlist-runtime")
 
 RAW_PLAYLIST_PATH = Path(os.getenv("RAW_PLAYLIST_PATH", "/data/input/playlist.m3u"))
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/data/output"))
-OUTPUT_PLAYLIST_NAME = os.getenv("OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u")
+OUTPUT_PLAYLIST_NAME = os.getenv("OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u8")
 PREVIOUS_CLEAN_PLAYLIST_NAME = os.getenv("PREVIOUS_CLEAN_PLAYLIST_NAME", OUTPUT_PLAYLIST_NAME)
 STATE_FILE = Path(os.getenv("STATE_FILE", "/data/output/.playlist_sanitizer_state"))
 DIAGNOSTICS_DIR = Path(os.getenv("DIAGNOSTICS_DIR", str(OUTPUT_DIR / "diagnostics")))

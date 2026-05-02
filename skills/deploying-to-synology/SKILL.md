@@ -74,8 +74,8 @@ ssh <user@host> 'cd /absolute/remote/repo && printf "%s\n" "<sudo-password-if-ne
 Verify the static server, generated playlist, and container status on the NAS:
 
 ```bash
-ssh <user@host> 'curl -I --max-time 5 http://127.0.0.1:8766/playlist_emby_clean.m3u'
-ssh <user@host> 'cd /absolute/remote/repo && rg -c "^#EXTINF" original_playlist.m3u8 published/playlist_emby_clean.m3u'
+ssh <user@host> 'curl -I --max-time 5 http://127.0.0.1:8766/playlist_emby_clean.m3u8'
+ssh <user@host> 'cd /absolute/remote/repo && rg -c "^#EXTINF" original_playlist.m3u8 published/playlist_emby_clean.m3u8'
 ssh <user@host> 'printf "%s\n" "<sudo-password-if-needed>" | sudo -S -p "" /var/packages/ContainerManager/target/usr/bin/docker compose ps playlist-sanitizer'
 ssh <user@host> 'printf "%s\n" "<sudo-password-if-needed>" | sudo -S -p "" /var/packages/ContainerManager/target/usr/bin/docker logs --tail 80 playlist-sanitizer'
 ```

@@ -15,7 +15,7 @@ def test_run_once_smoke(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(app_main, "RAW_PLAYLIST_PATH", raw)
     monkeypatch.setattr(app_main, "OUTPUT_DIR", out_dir)
-    monkeypatch.setattr(app_main, "OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u")
+    monkeypatch.setattr(app_main, "OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u8")
     monkeypatch.setattr(app_main, "PREVIOUS_CLEAN_PLAYLIST_NAME", "playlist_clean_prev.m3u")
     monkeypatch.setattr(app_main, "STATE_FILE", state_file)
     monkeypatch.setattr(app_main, "DIAGNOSTICS_DIR", out_dir / "diag")
@@ -38,7 +38,7 @@ def test_run_once_smoke(monkeypatch, tmp_path: Path):
     ok = asyncio.run(app_main.run_once())
     assert ok is True
 
-    output = (out_dir / "playlist_clean.m3u").read_text(encoding="utf-8")
+    output = (out_dir / "playlist_clean.m3u8").read_text(encoding="utf-8")
     assert "http://ok" in output
     assert "http://bad" not in output
     assert state_file.exists()
@@ -62,8 +62,8 @@ def test_publish_candidate_does_not_update_state_when_guard_rejects(monkeypatch,
     state_file = out_dir / ".state"
 
     monkeypatch.setattr(app_main, "OUTPUT_DIR", out_dir)
-    monkeypatch.setattr(app_main, "OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u")
-    monkeypatch.setattr(app_main, "PREVIOUS_CLEAN_PLAYLIST_NAME", "playlist_clean.m3u")
+    monkeypatch.setattr(app_main, "OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u8")
+    monkeypatch.setattr(app_main, "PREVIOUS_CLEAN_PLAYLIST_NAME", "playlist_clean.m3u8")
     monkeypatch.setattr(app_main, "STATE_FILE", state_file)
     monkeypatch.setattr(app_main, "DIAGNOSTICS_DIR", out_dir / "diag")
     monkeypatch.setattr(app_main, "MIN_VALID_CHANNELS_ABSOLUTE", 1)
@@ -80,13 +80,13 @@ def test_publish_candidate_skips_emby_refresh_when_content_unchanged(monkeypatch
     state_file = out_dir / ".state"
     content = "#EXTM3U\n#EXTINF:-1,Chan1\nhttp://ok\n"
     out_dir.mkdir()
-    (out_dir / "playlist_clean.m3u").write_text(content, encoding="utf-8")
+    (out_dir / "playlist_clean.m3u8").write_text(content, encoding="utf-8")
 
     refresh_calls: list[object] = []
 
     monkeypatch.setattr(app_main, "OUTPUT_DIR", out_dir)
-    monkeypatch.setattr(app_main, "OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u")
-    monkeypatch.setattr(app_main, "PREVIOUS_CLEAN_PLAYLIST_NAME", "playlist_clean.m3u")
+    monkeypatch.setattr(app_main, "OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u8")
+    monkeypatch.setattr(app_main, "PREVIOUS_CLEAN_PLAYLIST_NAME", "playlist_clean.m3u8")
     monkeypatch.setattr(app_main, "STATE_FILE", state_file)
     monkeypatch.setattr(app_main, "DIAGNOSTICS_DIR", out_dir / "diag")
     monkeypatch.setattr(app_main, "MIN_VALID_CHANNELS_ABSOLUTE", 1)
@@ -139,13 +139,13 @@ def test_should_run_immediately_on_start_requires_state_and_clean_playlist(monke
     out_dir = tmp_path / "out"
     state_file = out_dir / ".state"
     monkeypatch.setattr(app_main, "OUTPUT_DIR", out_dir)
-    monkeypatch.setattr(app_main, "OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u")
+    monkeypatch.setattr(app_main, "OUTPUT_PLAYLIST_NAME", "playlist_clean.m3u8")
     monkeypatch.setattr(app_main, "STATE_FILE", state_file)
 
     assert app_main.should_run_immediately_on_start() is True
 
     out_dir.mkdir()
     state_file.write_text("2026-04-30T00:00:00+00:00\n", encoding="utf-8")
-    (out_dir / "playlist_clean.m3u").write_text("#EXTM3U\n", encoding="utf-8")
+    (out_dir / "playlist_clean.m3u8").write_text("#EXTM3U\n", encoding="utf-8")
 
     assert app_main.should_run_immediately_on_start() is False
