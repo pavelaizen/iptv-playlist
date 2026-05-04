@@ -92,13 +92,18 @@ class AdminStore:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
 
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
     def initialize(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.executescript(SCHEMA_SQL)
 
     def seed_default_epg_sources(self, defaults: list[tuple[str, str]]) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             existing = conn.execute("SELECT COUNT(*) FROM epg_sources").fetchone()[0]
             if existing:
                 return
@@ -114,11 +119,11 @@ class AdminStore:
             )
 
     def channel_count(self) -> int:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
 
     def import_channels(self, imported_rows: list[dict[str, str]]) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             for index, row in enumerate(imported_rows):
                 cursor = conn.execute(
                     """
@@ -170,7 +175,7 @@ class AdminStore:
                 )
 
     def list_channels(self) -> list[ChannelDraft]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
@@ -237,7 +242,7 @@ class AdminStore:
         return drafts
 
     def list_epg_sources(self) -> list[EpgSource]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT id, display_name, source_url, enabled, priority FROM epg_sources ORDER BY priority, id"
@@ -258,7 +263,7 @@ class AdminStore:
         return channels[channel_id]
 
     def list_channel_epg_mappings(self, channel_id: int) -> list[dict[str, object]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
@@ -272,7 +277,7 @@ class AdminStore:
         return [dict(row) for row in rows]
 
     def list_runs(self, limit: int = 20) -> list[dict[str, object]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
@@ -295,11 +300,25 @@ def bootstrap_from_playlist(
 ) -> bool:
     if store.channel_count():
         return False
-    source_path = playlist_path if playlist_path and playlist_path.exists() else fallback_playlist_path
-    if source_path is None or not source_path.exists():
-        return False
-    imported_rows = import_playlist_entries(source_path)
-    if not imported_rows:
-        return False
-    store.import_channels(imported_rows)
-    return True
+
+    source_paths: list[Path] = []
+    if playlist_path and playlist_path.exists():
+        source_paths.append(playlist_path)
+    if (
+        fallback_playlist_path
+        and fallback_playlist_path.exists()
+        and fallback_playlist_path not in source_paths
+    ):
+        source_paths.append(fallback_playlist_path)
+
+    for source_path in source_paths:
+        try:
+            imported_rows = import_playlist_entries(source_path)
+        except Exception:
+            continue
+        if not imported_rows:
+            continue
+        store.import_channels(imported_rows)
+        return True
+
+    return False
