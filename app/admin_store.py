@@ -262,6 +262,141 @@ class AdminStore:
         channels = {channel.id: channel for channel in self.list_channels()}
         return channels[channel_id]
 
+    def update_channel(self, channel_id: int, payload: dict[str, object]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE channels
+                SET
+                    enabled = ?,
+                    name = ?,
+                    group_name = ?,
+                    stream_url = ?,
+                    tvg_id = ?,
+                    tvg_name = ?,
+                    tvg_logo = ?,
+                    tvg_rec = ?,
+                    draft_version = draft_version + 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (
+                    int(bool(payload["enabled"])),
+                    payload["name"],
+                    payload["group_name"],
+                    payload["stream_url"],
+                    payload["tvg_id"],
+                    payload["tvg_name"],
+                    payload["tvg_logo"],
+                    payload["tvg_rec"],
+                    channel_id,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE channel_validation_states
+                SET status = 'new', draft_differs_from_live = 1
+                WHERE channel_id = ?
+                """,
+                (channel_id,),
+            )
+
+    def replace_live_snapshot(self, channel_id: int, draft: ChannelDraft) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO channel_live_snapshots (
+                    channel_id, name, group_name, stream_url,
+                    tvg_id, tvg_name, tvg_logo, tvg_rec, validated_version
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(channel_id) DO UPDATE SET
+                    name = excluded.name,
+                    group_name = excluded.group_name,
+                    stream_url = excluded.stream_url,
+                    tvg_id = excluded.tvg_id,
+                    tvg_name = excluded.tvg_name,
+                    tvg_logo = excluded.tvg_logo,
+                    tvg_rec = excluded.tvg_rec,
+                    validated_version = excluded.validated_version,
+                    validated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    channel_id,
+                    draft.name,
+                    draft.group_name,
+                    draft.stream_url,
+                    draft.tvg_id,
+                    draft.tvg_name,
+                    draft.tvg_logo,
+                    draft.tvg_rec,
+                    draft.draft_version,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE channel_validation_states
+                SET
+                    status = 'valid',
+                    last_checked_at = CURRENT_TIMESTAMP,
+                    last_error = '',
+                    checked_version = ?,
+                    draft_differs_from_live = 0
+                WHERE channel_id = ?
+                """,
+                (draft.draft_version, channel_id),
+            )
+
+    def mark_channel_invalid(self, channel_id: int, draft_version: int, error_text: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE channel_validation_states
+                SET
+                    status = 'invalid',
+                    last_checked_at = CURRENT_TIMESTAMP,
+                    last_error = ?,
+                    checked_version = ?,
+                    draft_differs_from_live = 1
+                WHERE channel_id = ?
+                """,
+                (error_text, draft_version, channel_id),
+            )
+
+    def record_validation_run(
+        self,
+        *,
+        trigger_type: str,
+        status: str,
+        valid_count: int,
+        invalid_count: int,
+        publish_changed: bool,
+        epg_matched_channels: int,
+        epg_programmes: int,
+        error_summary: str,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO validation_runs (
+                    trigger_type, status, valid_count, invalid_count,
+                    publish_changed, epg_matched_channels, epg_programmes,
+                    error_summary, finished_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    trigger_type,
+                    status,
+                    valid_count,
+                    invalid_count,
+                    int(publish_changed),
+                    epg_matched_channels,
+                    epg_programmes,
+                    error_summary,
+                ),
+            )
+
     def list_channel_epg_mappings(self, channel_id: int) -> list[dict[str, object]]:
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
