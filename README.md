@@ -1,93 +1,65 @@
 # IPTV playlist publishing
 
-## Atomic publisher for Emby
+## Public URLs
 
-Use the publisher script so the Emby-facing playlist is always written atomically:
-
-```bash
-./publish_emby_playlist.sh
-```
-
-By default, this writes to a temporary file first and then atomically renames it:
-
-- temp: `published/playlist_emby_clean.m3u8.tmp`
-- final: `published/playlist_emby_clean.m3u8`
-
-Emby should reference only the stable final path/URL (`playlist_emby_clean.m3u8`), never the `.tmp` file.
-
-> Note: `published/playlist_emby_clean.m3u8` is generated output and is intentionally not committed.
-> The trimmed guide `published/epg.xml` is also generated output and should not be committed.
-
-## Stable HTTP URL via lightweight static server
-
-Serve only the published directory through a tiny static container while keeping URL path stable:
+Start static serving:
 
 ```bash
 docker compose -f docker-compose.playlist.yml up -d playlist-static
 ```
 
-Then point Emby to:
+Public endpoints stay stable:
 
 - `http://<host>:8766/playlist_emby_clean.m3u8`
 - `http://<host>:8766/epg.xml`
+- `http://<host>:8766/ui/channels`
 
-Keep this URL unchanged; updates happen in-place via atomic rename.
+## Admin runtime
 
-## Sanitizer runtime
-
-For automated probing and guarded publishing, run:
-
-```bash
-docker compose up -d --build playlist-sanitizer
-```
-
-The sanitizer now writes the guarded clean playlist directly to `published/playlist_emby_clean.m3u8`, which is the same file served by the static nginx container. Runtime state and guard-failure diagnostics are stored under `output/` so they are not exposed by nginx.
-
-By default, full playlist checks run daily at `03:00` in the container timezone (`TZ=Asia/Jerusalem` in Compose). First deploy still runs immediately when no clean playlist/state exists. Recovery checks run after the full scan at the configured offsets, defaulting to `30,60,240` minutes.
-
-If a scan produces the same clean playlist content that is already published, the sanitizer records the successful run but skips rewriting the file and skips the Emby refresh. This avoids unnecessary NAS and Emby load.
-
-For active debugging, run the sanitizer with verbose probe tracing:
+The repository now uses a DB-backed control plane service:
 
 ```bash
-LOG_LEVEL=DEBUG docker compose up -d --build playlist-sanitizer
-docker logs --tail 200 playlist-sanitizer
+docker compose up -d --build playlist-admin
 ```
 
-The runtime emits cycle, retry, recovery, and publish events to container stdout. Per-channel logs use channel names plus short fingerprints so you can trace failures and recoveries without exposing raw IPTV URLs in logs.
+`playlist-admin` owns:
 
-## EPG trimmer runtime
+- one-time migration from `original_playlist.m3u8` into SQLite
+- channel validation and guarded playlist publishing
+- EPG regeneration with per-channel explicit mappings plus source fallback
+- `/api/*` and `/ui/*` admin routes (proxied by `playlist-static`)
 
-For automated XMLTV guide trimming, run:
+Generated outputs remain in `published/`:
+
+- `published/playlist_emby_clean.m3u8`
+- `published/epg.xml`
+
+Private runtime data remains in `output/`.
+
+## Atomic raw-playlist publisher
+
+For manually publishing raw source playlist updates:
 
 ```bash
-docker compose up -d --build epg-trimmer
+./publish_emby_playlist.sh
 ```
 
-The worker downloads `EPG_SOURCE_URL` (default `http://epg.one/epg2.xml.gz`) for general matching, and when Israeli overrides are enabled it also downloads `EPG_ISRAEL_PRIMARY_URL` (default `https://iptvx.one/EPG`) plus `EPG_ISRAEL_FALLBACK_URL` (default `https://iptv-epg.org/files/epg-il.xml.gz`) for explicit Israeli channel-id mapping with fallback. It writes the trimmed guide to `published/epg.xml`. The existing static nginx container serves it at:
+## Verification
 
-- `http://<host>:8766/epg.xml`
-
-By default, EPG trimming runs daily at `04:00` in the container timezone, after the playlist sanitizer's default `03:00` run. A missing `epg.xml` triggers an immediate first run. A failed download, invalid XML, zero channel matches, or zero programmes preserves the previous EPG and skips Emby refresh.
-
-The worker refreshes Emby's guide only when the trimmed EPG content changes and Emby credentials are configured through `EMBY_BASE_URL` and `EMBY_API_KEY`.
-
-For Synology Container Manager, create the project from this Compose file and keep these host paths mounted:
-
-- `./original_playlist.m3u8` -> `/data/input/playlist.m3u` read-only
-- `./published` -> `/data/output` read-write
-- `./output` -> `/data/state` read-write
-
-The `epg-trimmer` service also uses `./published` -> `/data/output` and `./output` -> `/data/state`.
-
-To run unit tests:
+Run tests:
 
 ```bash
 python -m pytest -q tests
+python -m compileall -q app tests
 ```
 
-This service now runs `python -m app.main`, which:
-- probes channels asynchronously
-- applies publish guard thresholds
-- writes diagnostics when guard fails
-- optionally refreshes Emby Live TV endpoints
+Container checks:
+
+```bash
+docker compose up -d --build playlist-admin
+docker compose -f docker-compose.playlist.yml up -d playlist-static
+docker compose ps playlist-admin
+curl -I http://127.0.0.1:8766/playlist_emby_clean.m3u8
+curl -I http://127.0.0.1:8766/epg.xml
+curl -I http://127.0.0.1:8766/ui/channels
+```
