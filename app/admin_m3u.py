@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from app.admin_models import ChannelSnapshot
 from app.main import parse_m3u
 
 ATTR_RE = re.compile(r'([A-Za-z0-9_-]+)="([^"]*)"')
@@ -33,3 +34,32 @@ def import_playlist_entries(path: Path) -> list[dict[str, str]]:
             }
         )
     return rows
+
+
+def _render_extinf(snapshot: ChannelSnapshot) -> str:
+    attributes: list[str] = []
+    if snapshot.tvg_id:
+        attributes.append(f'tvg-id="{snapshot.tvg_id}"')
+    if snapshot.tvg_name:
+        attributes.append(f'tvg-name="{snapshot.tvg_name}"')
+    if snapshot.tvg_logo:
+        attributes.append(f'tvg-logo="{snapshot.tvg_logo}"')
+    if snapshot.tvg_rec:
+        attributes.append(f'tvg-rec="{snapshot.tvg_rec}"')
+    attr_text = f" {' '.join(attributes)}" if attributes else ""
+    return f"#EXTINF:0{attr_text},{snapshot.name}"
+
+
+def render_channel_entry(snapshot: ChannelSnapshot) -> list[str]:
+    lines = [_render_extinf(snapshot)]
+    if snapshot.group_name:
+        lines.append(f"#EXTGRP:{snapshot.group_name}")
+    lines.append(snapshot.stream_url)
+    return lines
+
+
+def render_playlist(snapshots: list[ChannelSnapshot]) -> str:
+    lines = ["#EXTM3U"]
+    for snapshot in snapshots:
+        lines.extend(render_channel_entry(snapshot))
+    return "\n".join(lines) + "\n"
