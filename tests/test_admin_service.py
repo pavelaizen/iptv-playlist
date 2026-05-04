@@ -185,3 +185,40 @@ def test_validate_channel_unknown_id_returns_not_found(tmp_path: Path) -> None:
     result = service.validate_channel(99999)
 
     assert result == {"status": "not_found", "channel_id": 99999}
+
+
+def test_validate_all_continues_when_one_epg_source_download_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    channel_id = seed_channel(store)
+    store.seed_default_epg_sources(
+        [
+            ("Main", "http://good.invalid/epg.xml.gz"),
+            ("Bad", "http://bad.invalid/epg.xml.gz"),
+        ]
+    )
+    settings = AdminServiceSettings(
+        output_dir=tmp_path / "published",
+        diagnostics_dir=tmp_path / "diagnostics",
+    )
+    service = AdminService(store=store, settings=settings)
+
+    monkeypatch.setattr(service, "_probe_urls", lambda channels: {channel_id: True})
+    monkeypatch.setattr(
+        service,
+        "_sync_epg",
+        lambda: {
+            "changed": True,
+            "matched_channels": 1,
+            "programmes": 2,
+            "failed_sources": ["http://bad.invalid/epg.xml.gz"],
+        },
+    )
+    monkeypatch.setattr(service, "_refresh_emby", lambda: None)
+
+    result = service.validate_all(trigger_type="manual")
+
+    assert result["status"] == "ok"
+    assert result["publish"]["epg"]["failed_sources"] == ["http://bad.invalid/epg.xml.gz"]

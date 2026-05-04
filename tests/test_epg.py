@@ -293,3 +293,47 @@ def test_trim_xmltv_with_israeli_overrides_uses_primary_and_fallback_sources(
     assert summary.matched_channel_count == 4
     assert summary.programme_count == 4
     assert summary.unmatched_playlist_names == ()
+
+
+def test_trim_xmltv_prefers_explicit_mapping_then_global_name_fallback(
+    tmp_path: Path,
+):
+    primary = tmp_path / "primary.xml.gz"
+    fallback = tmp_path / "fallback.xml.gz"
+    output = tmp_path / "epg.xml"
+
+    write_gzip(
+        primary,
+        "<tv>"
+        "  <channel id='other'><display-name>Other</display-name></channel>"
+        "  <programme channel='other'><title>Other</title></programme>"
+        "</tv>",
+    )
+    write_gzip(
+        fallback,
+        "<tv>"
+        "  <channel id='chan-12'><display-name>Keshet 12 FHD IL</display-name></channel>"
+        "  <programme channel='chan-12'><title>Morning</title></programme>"
+        "</tv>",
+    )
+
+    summary = epg.trim_xmltv_with_source_strategies(
+        published_channels=[
+            {
+                "name": "Keshet 12 FHD IL",
+                "mappings": [{"source_key": "primary", "channel_id": "missing-id"}],
+            }
+        ],
+        sources={"primary": primary, "fallback": fallback},
+        default_source_order=["primary", "fallback"],
+        output_xmltv_path=output,
+    )
+
+    root = ET.fromstring(read_text(output))
+    assert [channel.attrib["id"] for channel in root.findall("channel")] == ["chan-12"]
+    assert [programme.attrib["channel"] for programme in root.findall("programme")] == [
+        "chan-12"
+    ]
+    assert summary.matched_channel_count == 1
+    assert summary.programme_count == 1
+    assert summary.unmatched_playlist_names == ()

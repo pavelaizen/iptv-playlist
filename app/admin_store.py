@@ -411,6 +411,36 @@ class AdminStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def add_channel_epg_mapping(
+        self,
+        channel_id: int,
+        epg_source_id: int,
+        priority: int,
+        channel_xmltv_id: str,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO channel_epg_mappings (
+                    channel_id, epg_source_id, priority, channel_xmltv_id, enabled
+                )
+                VALUES (?, ?, ?, ?, 1)
+                """,
+                (channel_id, epg_source_id, priority, channel_xmltv_id),
+            )
+
+    def list_enabled_epg_sources_payload(self) -> list[dict[str, object]]:
+        return [
+            {
+                "id": source.id,
+                "display_name": source.display_name,
+                "source_url": source.source_url,
+                "enabled": source.enabled,
+            }
+            for source in self.list_epg_sources()
+            if source.enabled
+        ]
+
     def list_runs(self, limit: int = 20) -> list[dict[str, object]]:
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row

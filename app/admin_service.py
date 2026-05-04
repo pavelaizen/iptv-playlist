@@ -5,6 +5,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.admin_epg import sync_epg
 from app.admin_m3u import render_playlist
 from app.admin_models import ChannelDraft
 from app.admin_store import AdminStore
@@ -17,7 +18,9 @@ from app.publish import PublishGuardConfig, select_playlist_for_publish
 class AdminServiceSettings:
     output_dir: Path
     diagnostics_dir: Path
+    epg_work_dir: Path | None = None
     output_playlist_name: str = "playlist_emby_clean.m3u8"
+    output_epg_name: str = "epg.xml"
     min_valid_channels_absolute: int = 1
     min_valid_ratio_of_previous: float = 0.7
 
@@ -120,7 +123,40 @@ class AdminService:
         }
 
     def _sync_epg(self) -> dict[str, object]:
-        return {"changed": False, "matched_channels": 0, "programmes": 0}
+        channels = []
+        for draft in self.store.list_channels():
+            if not draft.enabled or draft.live_snapshot is None:
+                continue
+            channels.append(
+                {
+                    "name": draft.live_snapshot.name,
+                    "mappings": [
+                        {
+                            "source_key": f"source-{int(mapping['epg_source_id'])}",
+                            "channel_id": str(mapping["channel_xmltv_id"]),
+                        }
+                        for mapping in self.store.list_channel_epg_mappings(draft.id)
+                        if bool(mapping.get("enabled", True))
+                    ],
+                }
+            )
+
+        epg_sources = self.store.list_enabled_epg_sources_payload()
+        output_path = self.settings.output_dir / self.settings.output_epg_name
+        work_dir = self.settings.epg_work_dir or (self.settings.output_dir.parent / "state" / "epg")
+
+        result = sync_epg(
+            published_channels=channels,
+            epg_sources=epg_sources,
+            output_path=output_path,
+            work_dir=work_dir,
+        )
+        return {
+            "changed": result.changed,
+            "matched_channels": result.matched_channels,
+            "programmes": result.programmes,
+            "failed_sources": result.failed_sources,
+        }
 
     def _refresh_emby(self) -> None:
         refresh_livetv_after_publish()
