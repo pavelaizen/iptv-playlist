@@ -30,9 +30,11 @@ class AdminService:
 
     def validate_channel(self, channel_id: int) -> dict[str, object]:
         drafts = {draft.id: draft for draft in self.store.list_channels()}
-        draft = drafts[channel_id]
+        draft = drafts.get(channel_id)
+        if draft is None:
+            return {"status": "not_found", "channel_id": channel_id}
         probe_results = self._probe_urls([draft])
-        if not probe_results.get(draft.stream_url):
+        if not probe_results.get(channel_id):
             self.store.mark_channel_invalid(channel_id, draft.draft_version, "ffprobe failed")
             return {"status": "invalid", "channel_id": channel_id}
 
@@ -50,7 +52,7 @@ class AdminService:
             valid_count = 0
             invalid_count = 0
             for draft in drafts:
-                if probe_results.get(draft.stream_url):
+                if probe_results.get(draft.id):
                     self.store.replace_live_snapshot(draft.id, draft)
                     valid_count += 1
                 else:
@@ -105,13 +107,17 @@ class AdminService:
             "epg": epg_result,
         }
 
-    def _probe_urls(self, drafts: list[ChannelDraft]) -> dict[str, bool]:
+    def _probe_urls(self, drafts: list[ChannelDraft]) -> dict[int, bool]:
         targets = [
             ProbeTarget(url=draft.stream_url, name=draft.name, fingerprint=str(draft.id))
             for draft in drafts
         ]
         results, _ = asyncio.run(probe_channels(targets, ProbeSettings.from_env()))
-        return {result.channel: result.valid for result in results}
+        return {
+            int(result.channel_fingerprint): result.valid
+            for result in results
+            if result.channel_fingerprint.isdigit()
+        }
 
     def _sync_epg(self) -> dict[str, object]:
         return {"changed": False, "matched_channels": 0, "programmes": 0}
