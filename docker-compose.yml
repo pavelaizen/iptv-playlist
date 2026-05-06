@@ -1,80 +1,48 @@
 services:
-  playlist-sanitizer:
+  playlist-admin:
     build:
       context: .
       dockerfile: Dockerfile.playlist-sanitizer
-    container_name: playlist-sanitizer
+    container_name: playlist-admin
     working_dir: /app
-    network_mode: host
     volumes:
       - ./original_playlist.m3u8:/data/input/playlist.m3u:ro
       - ./published:/data/output:rw
       - ./output:/data/state:rw
       - ./app:/app/app:ro
-      - ./healthcheck.py:/app/healthcheck.py:ro
+    network_mode: host
     environment:
       TZ: ${TZ:-Asia/Jerusalem}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      RUN_INTERVAL_HOURS: ${RUN_INTERVAL_HOURS:-24}
-      FULL_CHECK_TIME: ${FULL_CHECK_TIME:-03:00}
-      EXTRA_RUN_DELAYS_MINUTES: ${EXTRA_RUN_DELAYS_MINUTES:-30,60,240}
 
-      # I/O settings
+      # Admin runtime settings
       RAW_PLAYLIST_PATH: ${RAW_PLAYLIST_PATH:-/data/input/playlist.m3u}
       OUTPUT_DIR: ${OUTPUT_DIR:-/data/output}
-      OUTPUT_PLAYLIST_NAME: ${OUTPUT_PLAYLIST_NAME:-playlist_emby_clean.m3u8}
-      STATE_FILE: ${STATE_FILE:-/data/state/.playlist_sanitizer_state}
       DIAGNOSTICS_DIR: ${DIAGNOSTICS_DIR:-/data/state/diagnostics}
+      ADMIN_DB_PATH: ${ADMIN_DB_PATH:-/data/state/admin/playlist.db}
+      ADMIN_BIND_HOST: ${ADMIN_BIND_HOST:-0.0.0.0}
+      ADMIN_BIND_PORT: ${ADMIN_BIND_PORT:-8780}
+      EPG_RUN_TIME: ${EPG_RUN_TIME:-04:00}
+      EPG_WORK_DIR: ${EPG_WORK_DIR:-/data/state/epg}
 
       # Probe settings
       PROBE_TIMEOUT_SECONDS: ${PROBE_TIMEOUT_SECONDS:-15}
-      PROBE_CONCURRENCY: ${PROBE_CONCURRENCY:-20}
+      PROBE_CONCURRENCY: ${PROBE_CONCURRENCY:-4}
       PROBE_RETRIES: ${PROBE_RETRIES:-1}
       PROBE_RETRY_DELAY_SECONDS: ${PROBE_RETRY_DELAY_SECONDS:-1}
+      STABILITY_TEST_SECONDS: ${STABILITY_TEST_SECONDS:-60}
+      STABILITY_TEST_TIMEOUT_PADDING_SECONDS: ${STABILITY_TEST_TIMEOUT_PADDING_SECONDS:-40}
 
-      # Emby settings
-      EMBY_BASE_URL: ${EMBY_BASE_URL:-}
-      EMBY_API_KEY: ${EMBY_API_KEY:-}
-
-    command: ["python", "-m", "app.main"]
-    healthcheck:
-      test: ["CMD", "python", "/app/healthcheck.py"]
-      interval: 5m
-      timeout: 15s
-      retries: 3
-      start_period: 2m
-    restart: unless-stopped
-
-  epg-trimmer:
-    build:
-      context: .
-      dockerfile: Dockerfile.playlist-sanitizer
-    container_name: epg-trimmer
-    working_dir: /app
-    network_mode: host
-    volumes:
-      - ./published:/data/output:rw
-      - ./output:/data/state:rw
-      - ./app:/app/app:ro
-    environment:
-      TZ: ${TZ:-Asia/Jerusalem}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # EPG source defaults
       EPG_SOURCE_URL: ${EPG_SOURCE_URL:-http://epg.one/epg2.xml.gz}
       EPG_ISRAEL_PRIMARY_URL: ${EPG_ISRAEL_PRIMARY_URL:-https://iptvx.one/EPG}
       EPG_ISRAEL_FALLBACK_URL: ${EPG_ISRAEL_FALLBACK_URL:-https://iptv-epg.org/files/epg-il.xml.gz}
-      EPG_ISRAEL_OVERRIDES_ENABLED: ${EPG_ISRAEL_OVERRIDES_ENABLED:-1}
-      EPG_RUN_TIME: ${EPG_RUN_TIME:-04:00}
-      EPG_PLAYLIST_PATH: ${EPG_PLAYLIST_PATH:-/data/output/playlist_emby_clean.m3u8}
-      EPG_OUTPUT_PATH: ${EPG_OUTPUT_PATH:-/data/output/epg.xml}
-      EPG_STATE_FILE: ${EPG_STATE_FILE:-/data/state/.epg_trimmer_state}
-      EPG_WORK_DIR: ${EPG_WORK_DIR:-/data/state/epg}
-      EPG_MIN_MATCHED_CHANNELS: ${EPG_MIN_MATCHED_CHANNELS:-1}
-      EPG_MIN_PROGRAMMES: ${EPG_MIN_PROGRAMMES:-1}
+      EPGPW_TIMEZONE: ${EPGPW_TIMEZONE:-Asia/Jerusalem}
 
       # Emby settings
       EMBY_BASE_URL: ${EMBY_BASE_URL:-}
       EMBY_API_KEY: ${EMBY_API_KEY:-}
       EMBY_LIVETV_TUNER_ID: ${EMBY_LIVETV_TUNER_ID:-}
 
-    command: ["python", "-m", "app.epg_worker"]
+    command: ["python", "-m", "app.admin_runtime"]
     restart: unless-stopped

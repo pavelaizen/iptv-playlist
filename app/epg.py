@@ -231,6 +231,181 @@ def trim_xmltv_to_playlist_channels_with_israeli_overrides(
     )
 
 
+def trim_xmltv_with_source_strategies(
+    *,
+    published_channels: list[dict[str, object]],
+    sources: dict[str, Path],
+    default_source_order: list[str],
+    output_xmltv_path: Path,
+) -> EpgTrimSummary:
+    playlist_names = [str(channel.get("name", "")) for channel in published_channels]
+    normalized_by_name = {
+        name: normalize_channel_name(name) for name in playlist_names if name
+    }
+
+    selected_by_source: dict[str, set[str]] = {
+        source_key: set() for source_key in sources.keys()
+    }
+    matched_normalized_names: set[str] = set()
+
+    explicit_ids_by_source: dict[str, set[str]] = {}
+    for channel in published_channels:
+        for mapping in channel.get("mappings", []):
+            if not isinstance(mapping, dict):
+                continue
+            source_key = str(mapping.get("source_key", ""))
+            channel_id = str(mapping.get("channel_id", ""))
+            if source_key in sources and channel_id:
+                explicit_ids_by_source.setdefault(source_key, set()).add(channel_id)
+
+    source_metadata: dict[str, tuple[str, dict[str, str], int]] = {}
+    explicit_stats_by_source: dict[str, _ChannelIdStats] = {}
+    for source_key, channel_ids in explicit_ids_by_source.items():
+        stats = _collect_channel_id_stats(sources[source_key], channel_ids)
+        explicit_stats_by_source[source_key] = stats
+        source_metadata[source_key] = (
+            stats.root_tag,
+            stats.root_attrib,
+            stats.source_channel_count,
+        )
+
+    remaining_channels: list[tuple[dict[str, object], str, str]] = []
+    for channel in published_channels:
+        channel_name = str(channel.get("name", ""))
+        normalized_name = normalize_channel_name(channel_name)
+        if not normalized_name:
+            continue
+
+        selected = _select_explicit_mapping_channel_id_from_stats(
+            channel=channel,
+            sources=sources,
+            stats_by_source=explicit_stats_by_source,
+        )
+        if selected is None:
+            remaining_channels.append((channel, channel_name, normalized_name))
+            continue
+
+        source_key, channel_id = selected
+        selected_by_source.setdefault(source_key, set()).add(channel_id)
+        matched_normalized_names.add(normalized_name)
+
+    remaining_names = {normalized_name for _, _, normalized_name in remaining_channels}
+    fallback_matches_by_source: dict[str, _FirstPassResult] = {}
+    fallback_stats_by_source: dict[str, _ChannelIdStats] = {}
+    source_order_for_fallback = [
+        source_key for source_key in default_source_order if source_key in sources
+    ]
+    for source_key in sources:
+        if source_key not in source_order_for_fallback:
+            source_order_for_fallback.append(source_key)
+
+    if remaining_names:
+        for source_key in source_order_for_fallback:
+            source_path = sources[source_key]
+            first_pass = _collect_xmltv_matches(source_path, remaining_names)
+            fallback_matches_by_source[source_key] = first_pass
+            source_metadata[source_key] = (
+                first_pass.root_tag,
+                first_pass.root_attrib,
+                first_pass.source_channel_count,
+            )
+            if first_pass.matched_channel_ids:
+                stats = _collect_channel_id_stats(
+                    source_path,
+                    set(first_pass.matched_channel_ids),
+                )
+                fallback_stats_by_source[source_key] = stats
+                source_metadata[source_key] = (
+                    stats.root_tag,
+                    stats.root_attrib,
+                    stats.source_channel_count,
+                )
+
+    for _, _, normalized_name in remaining_channels:
+        selected = _select_name_fallback_channel_id_from_batch(
+            normalized_name=normalized_name,
+            source_order=source_order_for_fallback,
+            matches_by_source=fallback_matches_by_source,
+            stats_by_source=fallback_stats_by_source,
+        )
+        if selected is None:
+            continue
+
+        source_key, channel_id = selected
+        selected_by_source.setdefault(source_key, set()).add(channel_id)
+        matched_normalized_names.add(normalized_name)
+
+    used_source_keys = [
+        source_key
+        for source_key, channel_ids in selected_by_source.items()
+        if channel_ids and source_key in sources
+    ]
+    if not used_source_keys:
+        output_xmltv_path.parent.mkdir(parents=True, exist_ok=True)
+        output_xmltv_path.write_text("<tv></tv>\n", encoding="utf-8")
+        _make_public_readable(output_xmltv_path)
+        return EpgTrimSummary(
+            playlist_channel_count=len(playlist_names),
+            source_channel_count=0,
+            matched_channel_count=0,
+            programme_count=0,
+            unmatched_playlist_names=tuple(playlist_names),
+        )
+
+    source_order = [
+        source_key for source_key in default_source_order if source_key in used_source_keys
+    ]
+    for source_key in used_source_keys:
+        if source_key not in source_order:
+            source_order.append(source_key)
+
+    source_selections: list[_SourceSelection] = []
+    source_channel_count = 0
+    for source_key in source_order:
+        metadata = source_metadata.get(source_key)
+        if metadata is None:
+            first_pass = _collect_xmltv_matches(sources[source_key], set())
+            metadata = (
+                first_pass.root_tag,
+                first_pass.root_attrib,
+                first_pass.source_channel_count,
+            )
+        root_tag, root_attrib, source_count = metadata
+        source_channel_count += source_count
+        source_selections.append(
+            _SourceSelection(
+                path=sources[source_key],
+                root_tag=root_tag,
+                root_attrib=root_attrib,
+                selected_channel_ids=set(selected_by_source[source_key]),
+                source_channel_count=source_count,
+            )
+        )
+
+    root_source = source_selections[0]
+    programme_count = _write_combined_trimmed_xmltv_atomically(
+        output_path=output_xmltv_path,
+        root_tag=root_source.root_tag,
+        root_attrib=root_source.root_attrib,
+        sources_in_order=tuple(source_selections),
+    )
+
+    unmatched_playlist_names = tuple(
+        name
+        for name in playlist_names
+        if normalized_by_name.get(name, "") not in matched_normalized_names
+    )
+    matched_channel_count = sum(len(channel_ids) for channel_ids in selected_by_source.values())
+
+    return EpgTrimSummary(
+        playlist_channel_count=len(playlist_names),
+        source_channel_count=source_channel_count,
+        matched_channel_count=matched_channel_count,
+        programme_count=programme_count,
+        unmatched_playlist_names=unmatched_playlist_names,
+    )
+
+
 @dataclass(frozen=True)
 class _FirstPassResult:
     root_tag: str
@@ -238,6 +413,7 @@ class _FirstPassResult:
     source_channel_count: int
     matched_channel_ids: frozenset[str]
     matched_names: frozenset[str]
+    matched_channel_ids_by_name: dict[str, frozenset[str]]
 
 
 @dataclass
@@ -368,6 +544,161 @@ def _is_usable_channel_id(
     return stats.programme_counts_by_channel_id.get(channel_id, 0) > 0
 
 
+def _collect_source_matches_cached(
+    *,
+    source_key: str,
+    source_path: Path,
+    wanted_names: set[str],
+    source_cache: dict[str, _FirstPassResult],
+) -> _FirstPassResult:
+    if source_key in source_cache:
+        return source_cache[source_key]
+
+    first_pass = _collect_xmltv_matches(source_path, wanted_names)
+    source_cache[source_key] = first_pass
+    return first_pass
+
+
+def _select_explicit_mapping_channel_id(
+    *,
+    channel: dict[str, object],
+    sources: dict[str, Path],
+    source_stats_cache: dict[tuple[str, tuple[str, ...]], _ChannelIdStats],
+) -> tuple[str, str] | None:
+    for mapping in channel.get("mappings", []):
+        if not isinstance(mapping, dict):
+            continue
+
+        source_key = str(mapping.get("source_key", ""))
+        channel_id = str(mapping.get("channel_id", ""))
+        if not source_key or not channel_id:
+            continue
+        if source_key not in sources:
+            continue
+
+        stats = _collect_channel_id_stats_cached(
+            source_key=source_key,
+            source_path=sources[source_key],
+            channel_ids={channel_id},
+            source_stats_cache=source_stats_cache,
+        )
+        if (
+            channel_id in stats.present_channel_ids
+            and stats.programme_counts_by_channel_id.get(channel_id, 0) > 0
+        ):
+            return source_key, channel_id
+
+    return None
+
+
+def _select_explicit_mapping_channel_id_from_stats(
+    *,
+    channel: dict[str, object],
+    sources: dict[str, Path],
+    stats_by_source: dict[str, _ChannelIdStats],
+) -> tuple[str, str] | None:
+    for mapping in channel.get("mappings", []):
+        if not isinstance(mapping, dict):
+            continue
+
+        source_key = str(mapping.get("source_key", ""))
+        channel_id = str(mapping.get("channel_id", ""))
+        if not source_key or not channel_id:
+            continue
+        if source_key not in sources:
+            continue
+
+        stats = stats_by_source.get(source_key)
+        if stats is None:
+            continue
+        if channel_id in stats.present_channel_ids and stats.programme_counts_by_channel_id.get(channel_id, 0) > 0:
+            return source_key, channel_id
+
+    return None
+
+
+def _select_name_fallback_channel_id(
+    *,
+    normalized_name: str,
+    sources: dict[str, Path],
+    source_order: list[str],
+    source_cache: dict[str, _FirstPassResult],
+    source_stats_cache: dict[tuple[str, tuple[str, ...]], _ChannelIdStats],
+) -> tuple[str, str] | None:
+    for source_key in source_order:
+        source_path = sources.get(source_key)
+        if source_path is None:
+            continue
+
+        single_pass = _collect_xmltv_matches(source_path, {normalized_name})
+        if not single_pass.matched_channel_ids:
+            _collect_source_matches_cached(
+                source_key=source_key,
+                source_path=source_path,
+                wanted_names=set(),
+                source_cache=source_cache,
+            )
+            continue
+
+        matched_ids = set(single_pass.matched_channel_ids)
+        stats = _collect_channel_id_stats_cached(
+            source_key=source_key,
+            source_path=source_path,
+            channel_ids=matched_ids,
+            source_stats_cache=source_stats_cache,
+        )
+        for channel_id in sorted(matched_ids):
+            if channel_id in stats.present_channel_ids and stats.programme_counts_by_channel_id.get(channel_id, 0) > 0:
+                return source_key, channel_id
+
+    return None
+
+
+def _select_name_fallback_channel_id_from_batch(
+    *,
+    normalized_name: str,
+    source_order: list[str],
+    matches_by_source: dict[str, _FirstPassResult],
+    stats_by_source: dict[str, _ChannelIdStats],
+) -> tuple[str, str] | None:
+    for source_key in source_order:
+        first_pass = matches_by_source.get(source_key)
+        if first_pass is None:
+            continue
+        matched_ids = set(first_pass.matched_channel_ids_by_name.get(normalized_name, ()))
+        if not matched_ids:
+            continue
+
+        stats = stats_by_source.get(source_key)
+        if stats is None:
+            continue
+        for channel_id in sorted(matched_ids):
+            if (
+                channel_id in stats.present_channel_ids
+                and stats.programme_counts_by_channel_id.get(channel_id, 0) > 0
+            ):
+                return source_key, channel_id
+
+    return None
+
+
+def _collect_channel_id_stats_cached(
+    *,
+    source_key: str,
+    source_path: Path,
+    channel_ids: set[str],
+    source_stats_cache: dict[tuple[str, tuple[str, ...]], _ChannelIdStats],
+) -> _ChannelIdStats:
+    cache_key = (source_key, tuple(sorted(channel_ids)))
+    cached = source_stats_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    stats = _collect_channel_id_stats(source_path, channel_ids)
+    source_stats_cache[cache_key] = stats
+    return stats
+
+
 def _collect_channel_id_stats(
     source_path: Path,
     wanted_channel_ids: set[str],
@@ -412,6 +743,7 @@ def _write_combined_trimmed_xmltv_atomically(
 
             output_fh.write(f"</{escape(root_tag)}>\n")
 
+        _make_public_readable(temp_path)
         os.replace(temp_path, output_path)
         return programme_count
     except Exception:
@@ -457,11 +789,16 @@ def _write_trimmed_xmltv_atomically(
                 matched_channel_ids=matched_channel_ids,
             )
 
+        _make_public_readable(temp_path)
         os.replace(temp_path, output_path)
         return programme_count
     except Exception:
         temp_path.unlink(missing_ok=True)
         raise
+
+
+def _make_public_readable(path: Path) -> None:
+    os.chmod(path, 0o644)
 
 
 def _stream_matching_xmltv_elements(
@@ -514,6 +851,7 @@ class _ChannelMatchHandler(ContentHandler):
         self._source_channel_count = 0
         self._matched_channel_ids: set[str] = set()
         self._matched_names: set[str] = set()
+        self._matched_channel_ids_by_name: dict[str, set[str]] = {}
         self._current_channel_id: str | None = None
         self._display_name_depth = 0
         self._display_name_parts: list[str] = []
@@ -552,6 +890,10 @@ class _ChannelMatchHandler(ContentHandler):
             if matching_names:
                 self._matched_channel_ids.add(self._current_channel_id)
                 self._matched_names.update(matching_names)
+                for matching_name in matching_names:
+                    self._matched_channel_ids_by_name.setdefault(matching_name, set()).add(
+                        self._current_channel_id
+                    )
             self._current_channel_id = None
             self._current_display_names = set()
 
@@ -564,6 +906,10 @@ class _ChannelMatchHandler(ContentHandler):
             source_channel_count=self._source_channel_count,
             matched_channel_ids=frozenset(self._matched_channel_ids),
             matched_names=frozenset(self._matched_names),
+            matched_channel_ids_by_name={
+                name: frozenset(channel_ids)
+                for name, channel_ids in self._matched_channel_ids_by_name.items()
+            },
         )
 
 
@@ -680,5 +1026,11 @@ def _parse_gzip_xml(path: Path, handler: ContentHandler) -> None:
         except (SAXNotRecognizedException, SAXNotSupportedException):
             pass
 
-    with gzip.open(path, "rb") as source_fh:
+    opener = gzip.open if _looks_gzip(path) else open
+    with opener(path, "rb") as source_fh:
         parser.parse(source_fh)
+
+
+def _looks_gzip(path: Path) -> bool:
+    with path.open("rb") as fh:
+        return fh.read(2) == b"\x1f\x8b"

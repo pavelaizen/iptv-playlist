@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import stat
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -145,6 +146,7 @@ def test_trim_xmltv_keeps_only_matching_channels_and_programmes(tmp_path: Path):
         programme_count=2,
         unmatched_playlist_names=(),
     )
+    assert stat.S_IMODE(output.stat().st_mode) == 0o644
 
 
 def test_trim_xmltv_reports_unmatched_playlist_names(tmp_path: Path):
@@ -293,3 +295,131 @@ def test_trim_xmltv_with_israeli_overrides_uses_primary_and_fallback_sources(
     assert summary.matched_channel_count == 4
     assert summary.programme_count == 4
     assert summary.unmatched_playlist_names == ()
+
+
+def test_trim_xmltv_prefers_explicit_mapping_then_global_name_fallback(
+    tmp_path: Path,
+):
+    primary = tmp_path / "primary.xml.gz"
+    fallback = tmp_path / "fallback.xml.gz"
+    output = tmp_path / "epg.xml"
+
+    write_gzip(
+        primary,
+        "<tv>"
+        "  <channel id='other'><display-name>Other</display-name></channel>"
+        "  <programme channel='other'><title>Other</title></programme>"
+        "</tv>",
+    )
+    write_gzip(
+        fallback,
+        "<tv>"
+        "  <channel id='chan-12'><display-name>Keshet 12 FHD IL</display-name></channel>"
+        "  <programme channel='chan-12'><title>Morning</title></programme>"
+        "</tv>",
+    )
+
+    summary = epg.trim_xmltv_with_source_strategies(
+        published_channels=[
+            {
+                "name": "Keshet 12 FHD IL",
+                "mappings": [{"source_key": "primary", "channel_id": "missing-id"}],
+            }
+        ],
+        sources={"primary": primary, "fallback": fallback},
+        default_source_order=["primary", "fallback"],
+        output_xmltv_path=output,
+    )
+
+    root = ET.fromstring(read_text(output))
+    assert [channel.attrib["id"] for channel in root.findall("channel")] == ["chan-12"]
+    assert [programme.attrib["channel"] for programme in root.findall("programme")] == [
+        "chan-12"
+    ]
+    assert summary.matched_channel_count == 1
+    assert summary.programme_count == 1
+    assert summary.unmatched_playlist_names == ()
+
+
+def test_source_strategy_batches_explicit_mapping_scans(
+    tmp_path: Path,
+    monkeypatch,
+):
+    source = tmp_path / "source.xml.gz"
+    output = tmp_path / "epg.xml"
+    write_gzip(
+        source,
+        "<tv>"
+        "  <channel id='one'><display-name>One</display-name></channel>"
+        "  <channel id='two'><display-name>Two</display-name></channel>"
+        "  <channel id='three'><display-name>Three</display-name></channel>"
+        "  <programme channel='one'><title>One</title></programme>"
+        "  <programme channel='two'><title>Two</title></programme>"
+        "  <programme channel='three'><title>Three</title></programme>"
+        "</tv>",
+    )
+    parse_counts: dict[Path, int] = {}
+    original_parse = epg._parse_gzip_xml
+
+    def counting_parse(path, handler):
+        parse_counts[path] = parse_counts.get(path, 0) + 1
+        return original_parse(path, handler)
+
+    monkeypatch.setattr(epg, "_parse_gzip_xml", counting_parse)
+
+    summary = epg.trim_xmltv_with_source_strategies(
+        published_channels=[
+            {"name": "One", "mappings": [{"source_key": "main", "channel_id": "one"}]},
+            {"name": "Two", "mappings": [{"source_key": "main", "channel_id": "two"}]},
+            {"name": "Three", "mappings": [{"source_key": "main", "channel_id": "three"}]},
+        ],
+        sources={"main": source},
+        default_source_order=["main"],
+        output_xmltv_path=output,
+    )
+
+    assert summary.matched_channel_count == 3
+    assert summary.programme_count == 3
+    assert parse_counts[source] == 2
+
+
+def test_source_strategy_batches_name_fallback_scans(
+    tmp_path: Path,
+    monkeypatch,
+):
+    source = tmp_path / "source.xml.gz"
+    output = tmp_path / "epg.xml"
+    write_gzip(
+        source,
+        "<tv>"
+        "  <channel id='one'><display-name>One</display-name></channel>"
+        "  <channel id='two'><display-name>Two</display-name></channel>"
+        "  <channel id='three'><display-name>Three</display-name></channel>"
+        "  <programme channel='one'><title>One</title></programme>"
+        "  <programme channel='two'><title>Two</title></programme>"
+        "  <programme channel='three'><title>Three</title></programme>"
+        "</tv>",
+    )
+    parse_counts: dict[Path, int] = {}
+    original_parse = epg._parse_gzip_xml
+
+    def counting_parse(path, handler):
+        parse_counts[path] = parse_counts.get(path, 0) + 1
+        return original_parse(path, handler)
+
+    monkeypatch.setattr(epg, "_parse_gzip_xml", counting_parse)
+
+    summary = epg.trim_xmltv_with_source_strategies(
+        published_channels=[
+            {"name": "One", "mappings": []},
+            {"name": "Two", "mappings": []},
+            {"name": "Three", "mappings": []},
+        ],
+        sources={"main": source},
+        default_source_order=["main"],
+        output_xmltv_path=output,
+    )
+
+    assert summary.matched_channel_count == 3
+    assert summary.programme_count == 3
+    assert parse_counts[source] == 3

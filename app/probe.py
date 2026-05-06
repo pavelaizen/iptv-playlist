@@ -22,12 +22,7 @@ DEFAULT_RETRY_DELAY_SECONDS = 1.0
 
 LOGGER = logging.getLogger(__name__)
 
-DECODER_CORRUPTION_PATTERNS = (
-    "mmco:",
-    "corrupt input",
-    "error while decoding",
-    "exceeds max",
-)
+
 
 
 @dataclass(slots=True)
@@ -108,17 +103,6 @@ def _normalize_probe_target(channel: str | ProbeTarget) -> ProbeTarget:
     return ProbeTarget(url=channel)
 
 
-def _extract_decoder_corruption(stderr_text: str) -> str | None:
-    normalized = stderr_text.lower()
-    for line in stderr_text.splitlines():
-        lowered_line = line.lower()
-        if any(pattern in lowered_line for pattern in DECODER_CORRUPTION_PATTERNS):
-            return line.strip()
-    if any(pattern in normalized for pattern in DECODER_CORRUPTION_PATTERNS):
-        return stderr_text.strip().splitlines()[0]
-    return None
-
-
 async def _run_ffprobe(channel: str, timeout_seconds: float) -> tuple[bool, bool, str | None]:
     cmd = (
         "ffprobe",
@@ -155,10 +139,6 @@ async def _run_ffprobe(channel: str, timeout_seconds: float) -> tuple[bool, bool
         payload = json.loads(stdout.decode("utf-8", errors="replace"))
     except json.JSONDecodeError as exc:
         return False, False, f"invalid json: {exc}"
-
-    corruption_error = _extract_decoder_corruption(stderr_text)
-    if corruption_error is not None:
-        return False, False, f"decoder corruption reported by ffprobe: {corruption_error}"
 
     if _is_valid_probe_payload(payload):
         return True, False, None
