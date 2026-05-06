@@ -31,21 +31,54 @@ def test_import_playlist_entries_extracts_structured_fields(tmp_path: Path) -> N
     ]
 
 
-def test_render_channel_entry_omits_empty_attrs_and_group_line() -> None:
+def test_import_playlist_entries_preserves_group_title_attribute(tmp_path: Path) -> None:
+    playlist = tmp_path / "playlist.m3u8"
+    playlist.write_text(
+        "#EXTM3U\n"
+        '#EXTINF:0 tvg-id="chan-1" group-title="News",Channel One\n'
+        "http://provider.invalid/one\n",
+        encoding="utf-8",
+    )
+
+    rows = import_playlist_entries(playlist)
+
+    assert rows[0]["group_name"] == "News"
+
+
+def test_render_channel_entry_with_logo_and_group() -> None:
     snapshot = ChannelSnapshot(
-        name="Channel One",
-        group_name="",
-        stream_url="http://provider.invalid/one",
-        tvg_id="chan-1",
-        tvg_name="",
-        tvg_logo="",
-        tvg_rec="",
-        validated_version=2,
+        name="Channel Two",
+        group_name="Sports",
+        stream_url="http://provider.invalid/two",
+        tvg_id="chan-2",
+        tvg_name="Channel Two",
+        tvg_logo="logo2",
+        tvg_rec="4",
+        validated_version=3,
     )
 
     assert render_channel_entry(snapshot) == [
-        '#EXTINF:0 tvg-id="chan-1",Channel One',
-        "http://provider.invalid/one",
+        '#EXTINF:0 tvg-id="chan-2" tvg-rec="4" tvg-logo="logo2",Channel Two',
+        "#EXTGRP:Sports",
+        "http://provider.invalid/two",
+    ]
+
+
+def test_render_channel_entry_minimal() -> None:
+    snapshot = ChannelSnapshot(
+        name="Channel Three",
+        group_name="",
+        stream_url="http://provider.invalid/three",
+        tvg_id="",
+        tvg_name="",
+        tvg_logo="",
+        tvg_rec="",
+        validated_version=1,
+    )
+
+    assert render_channel_entry(snapshot) == [
+        "#EXTINF:0,Channel Three",
+        "http://provider.invalid/three",
     ]
 
 
@@ -77,7 +110,7 @@ def test_render_playlist_uses_structured_fields_and_order() -> None:
 
     assert playlist == (
         "#EXTM3U\n"
-        '#EXTINF:0 tvg-id="chan-2" tvg-name="Channel Two" tvg-logo="logo2" tvg-rec="4",Channel Two\n'
+        '#EXTINF:0 tvg-id="chan-2" tvg-rec="4" tvg-logo="logo2",Channel Two\n'
         "#EXTGRP:Sports\n"
         "http://provider.invalid/two\n"
         "#EXTINF:0,Channel Three\n"

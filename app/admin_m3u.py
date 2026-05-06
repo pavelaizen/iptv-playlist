@@ -16,16 +16,20 @@ def import_playlist_entries(path: Path) -> list[dict[str, str]]:
             (line.strip() for line in metadata_lines if line.strip().upper().startswith("#EXTINF")),
             "",
         )
-        group_line = next(
-            (line.strip() for line in metadata_lines if line.strip().upper().startswith("#EXTGRP:")),
-            "#EXTGRP:",
-        )
         _, _, channel_name = extinf_line.partition(",")
         attrs = dict(ATTR_RE.findall(extinf_line))
+        extgrp_group = next(
+            (
+                line.strip().split(":", 1)[1].strip()
+                for line in metadata_lines
+                if line.strip().upper().startswith("#EXTGRP:")
+            ),
+            "",
+        )
         rows.append(
             {
                 "name": channel_name.strip() or "unnamed-channel",
-                "group_name": group_line.split(":", 1)[1].strip(),
+                "group_name": attrs.get("group-title", "") or extgrp_group,
                 "stream_url": url.strip(),
                 "tvg_id": attrs.get("tvg-id", ""),
                 "tvg_name": attrs.get("tvg-name", ""),
@@ -40,12 +44,10 @@ def _render_extinf(snapshot: ChannelSnapshot) -> str:
     attributes: list[str] = []
     if snapshot.tvg_id:
         attributes.append(f'tvg-id="{snapshot.tvg_id}"')
-    if snapshot.tvg_name:
-        attributes.append(f'tvg-name="{snapshot.tvg_name}"')
-    if snapshot.tvg_logo:
-        attributes.append(f'tvg-logo="{snapshot.tvg_logo}"')
     if snapshot.tvg_rec:
         attributes.append(f'tvg-rec="{snapshot.tvg_rec}"')
+    if snapshot.tvg_logo:
+        attributes.append(f'tvg-logo="{snapshot.tvg_logo}"')
     attr_text = f" {' '.join(attributes)}" if attributes else ""
     return f"#EXTINF:0{attr_text},{snapshot.name}"
 

@@ -10,6 +10,7 @@ services:
       - ./published:/data/output:rw
       - ./output:/data/state:rw
       - ./app:/app/app:ro
+    network_mode: host
     environment:
       TZ: ${TZ:-Asia/Jerusalem}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -26,14 +27,17 @@ services:
 
       # Probe settings
       PROBE_TIMEOUT_SECONDS: ${PROBE_TIMEOUT_SECONDS:-15}
-      PROBE_CONCURRENCY: ${PROBE_CONCURRENCY:-20}
+      PROBE_CONCURRENCY: ${PROBE_CONCURRENCY:-4}
       PROBE_RETRIES: ${PROBE_RETRIES:-1}
       PROBE_RETRY_DELAY_SECONDS: ${PROBE_RETRY_DELAY_SECONDS:-1}
+      STABILITY_TEST_SECONDS: ${STABILITY_TEST_SECONDS:-60}
+      STABILITY_TEST_TIMEOUT_PADDING_SECONDS: ${STABILITY_TEST_TIMEOUT_PADDING_SECONDS:-40}
 
       # EPG source defaults
       EPG_SOURCE_URL: ${EPG_SOURCE_URL:-http://epg.one/epg2.xml.gz}
       EPG_ISRAEL_PRIMARY_URL: ${EPG_ISRAEL_PRIMARY_URL:-https://iptvx.one/EPG}
       EPG_ISRAEL_FALLBACK_URL: ${EPG_ISRAEL_FALLBACK_URL:-https://iptv-epg.org/files/epg-il.xml.gz}
+      EPGPW_TIMEZONE: ${EPGPW_TIMEZONE:-Asia/Jerusalem}
 
       # Emby settings
       EMBY_BASE_URL: ${EMBY_BASE_URL:-}

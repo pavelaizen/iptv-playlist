@@ -22,10 +22,12 @@ Do not paste provider URLs, tokens, passwords, or API keys into commits/docs/cha
 - `app/admin_service.py` - validation orchestration, guard publish, EPG sync integration, job lock.
 - `app/admin_web.py` - admin HTTP routes (`/api/*`, `/ui/*`) and HTML rendering.
 - `app/admin_epg.py` - EPG source download orchestration and mapping-aware trim invocation.
+- `app/epg_sources.py` - EPG source URL canonicalization, dynamic `epg.pw` expansion, shared XML/XML.GZ downloader.
 - `app/admin_m3u.py` - M3U import parsing and deterministic channel rendering.
 - `app/admin_models.py` - shared dataclasses and typed literals.
 - `app/epg.py` - XMLTV trimming primitives, Israeli overrides, generic source-strategy trim.
 - `app/probe.py` - async ffprobe worker utilities.
+- `app/stream_stability.py` - longer `ffmpeg` decode checks for stream stability.
 - `app/publish.py` - publish guard behavior for playlist content.
 - `app/emby_client.py` - optional Emby refresh client.
 - `docker-compose.yml` - `playlist-admin` service.
@@ -72,14 +74,25 @@ Primary runtime (`app.admin_runtime`):
 - `ADMIN_BIND_PORT` default `8780`
 - `EPG_RUN_TIME` default `04:00`
 - `EPG_WORK_DIR` default `/data/state/epg`
+- `EPGPW_TIMEZONE` default `Asia/Jerusalem`
 
 Probe/runtime:
 
 - `LOG_LEVEL` default `INFO`
 - `PROBE_TIMEOUT_SECONDS` default `15`
-- `PROBE_CONCURRENCY` default `20`
+- `PROBE_CONCURRENCY` default `4`
 - `PROBE_RETRIES` default `1`
 - `PROBE_RETRY_DELAY_SECONDS` default `1`
+- `STABILITY_TEST_SECONDS` default `60`
+- `STABILITY_TEST_TIMEOUT_PADDING_SECONDS` default `40`
+
+Extended stream stability checks:
+
+- The normal Validate action stays a fast `ffprobe` availability check.
+- Extended tests use `ffmpeg -f null -` to decode video/audio for
+  `STABILITY_TEST_SECONDS`.
+- Extended results are stored on stream variants separately from channel
+  validity and do not block publishing by themselves.
 
 Default EPG source seeds:
 
@@ -87,11 +100,28 @@ Default EPG source seeds:
 - `EPG_ISRAEL_PRIMARY_URL` default `https://iptvx.one/EPG`
 - `EPG_ISRAEL_FALLBACK_URL` default `https://iptv-epg.org/files/epg-il.xml.gz`
 
+`epg.pw` per-channel URLs are accepted as `/last/<id>.html` or `/api/epg.xml`
+links. They are stored without a stale `date=` parameter; downloads add the
+current date and Base64-encoded `EPGPW_TIMEZONE`.
+
 Emby:
 
 - `EMBY_BASE_URL`
 - `EMBY_API_KEY`
 - `EMBY_LIVETV_TUNER_ID` optional
+
+## Deployment
+
+See `docs/deploy-to-synology.md` for full Synology deployment guide including networking, DNS, and troubleshooting.
+
+Key points:
+- Both containers use `network_mode: host` (Synology Docker bridge firewall blocks inter-container traffic).
+- Nginx on `:8766` proxies `/ui/` and `/api/` to `127.0.0.1:8780`.
+- `extra_hosts` and `dns` directives are incompatible with `network_mode: host`. Use Synology `/etc/hosts` instead.
+- `scp` subsystem is often broken on Synology SSH. Use `tar czf - | ssh ... 'tar xzf -'` or `base64` pipe.
+- Docker image rebuild often fails due to Synology DNS. Restart containers for code-only changes (Python code is bind-mounted).
+- Use `--force-recreate` (not `restart`) when `docker-compose.yml` volumes/env change.
+- Docker binary on Synology is at `/usr/local/bin/docker`. `sudo` requires `-S` flag for password from stdin.
 
 ## Common Commands
 
@@ -101,9 +131,9 @@ python -m compileall -q app tests
 docker compose up -d --build playlist-admin
 docker compose -f docker-compose.playlist.yml up -d playlist-static
 docker compose ps playlist-admin
-curl -I http://127.0.0.1:8766/playlist_emby_clean.m3u8
-curl -I http://127.0.0.1:8766/epg.xml
-curl -I http://127.0.0.1:8766/ui/channels
+curl -I http://192.168.1.113:8766/playlist_emby_clean.m3u8
+curl -I http://192.168.1.113:8766/epg.xml
+curl -I http://192.168.1.113:8766/ui/channels
 ./publish_emby_playlist.sh
 ```
 
@@ -114,3 +144,4 @@ curl -I http://127.0.0.1:8766/ui/channels
 - Preserve fail-safe behavior: bad runs must not wipe good published outputs.
 - Keep Emby refresh non-fatal.
 - Avoid network access in unit tests; monkeypatch downloads/probe/Emby calls.
+- Keep `epg.pw` handling in `app/epg_sources.py`; do not scrape HTML search pages for runtime guide generation.
