@@ -16,6 +16,7 @@ def test_playlist_admin_runs_http_service_and_owns_private_state():
     assert "./output:/data/state:rw" in compose
     assert "network_mode: host" in compose
     assert "ADMIN_DB_PATH: ${ADMIN_DB_PATH:-/data/state/admin/playlist.db}" in compose
+    assert "ADMIN_BIND_HOST: ${ADMIN_BIND_HOST:-127.0.0.1}" in compose
     assert "ADMIN_BIND_PORT: ${ADMIN_BIND_PORT:-8780}" in compose
     assert "EPG_RUN_TIME: ${EPG_RUN_TIME:-04:00}" in compose
     assert "EPG_SOURCE_URL: ${EPG_SOURCE_URL:-http://epg.one/epg2.xml.gz}" in compose

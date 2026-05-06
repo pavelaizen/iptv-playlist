@@ -47,6 +47,53 @@ def test_bootstrap_from_playlist_imports_rows_and_preserves_duplicates(tmp_path:
     assert [len(store.list_stream_variants(channel.id)) for channel in channels] == [1, 1, 1]
 
 
+def test_initialize_ignores_orphan_stream_variants_when_backfilling_live_snapshots(tmp_path: Path):
+    db_path = tmp_path / "playlist.db"
+    store = AdminStore(db_path)
+    store.initialize()
+    store.import_channels(
+        [
+            {
+                "name": "Channel One",
+                "group_name": "News",
+                "stream_url": "http://provider.invalid/one",
+                "tvg_id": "chan-1",
+                "tvg_name": "Channel One",
+                "tvg_logo": "",
+                "tvg_rec": "",
+            }
+        ]
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("DELETE FROM channel_stream_variant_live_snapshots")
+        conn.execute(
+            """
+            INSERT INTO channel_stream_variants (
+                id, channel_id, label, url, display_order, enabled, last_probe_status
+            )
+            VALUES (999, 999, 'Orig', 'http://provider.invalid/orphan', 0, 1, 'valid')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO channel_live_snapshots (
+                channel_id, name, group_name, stream_url,
+                tvg_id, tvg_name, tvg_logo, tvg_rec, validated_version
+            )
+            VALUES (999, 'Orphan', '', 'http://provider.invalid/orphan', '', '', '', '', 1)
+            """
+        )
+
+    store.initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        orphan_live = conn.execute(
+            "SELECT 1 FROM channel_stream_variant_live_snapshots WHERE stream_id = 999"
+        ).fetchone()
+    assert orphan_live is None
+
+
 def test_bootstrap_from_playlist_is_one_shot_when_channels_exist(tmp_path: Path):
     db_path = tmp_path / "playlist.db"
     playlist_path = tmp_path / "original_playlist.m3u8"

@@ -9,7 +9,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 from app.epg import trim_xmltv_with_source_strategies
-from app.epg_sources import download_epg_source
+from app.epg_sources import download_epg_source, validate_public_source_url
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,7 @@ def sync_epg(
     epg_sources: list[dict[str, object]],
     output_path: Path,
     work_dir: Path,
+    allow_private_source_urls: bool = False,
 ) -> EpgSyncResult:
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -43,7 +44,23 @@ def sync_epg(
         source_path = work_dir / f"{source_key}.xmltv"
 
         try:
-            download_epg_source(source_url, source_path)
+            validate_public_source_url(
+                source_url,
+                allow_private_source_urls=allow_private_source_urls,
+            )
+        except ValueError:
+            failed_sources.append(source_url)
+            continue
+
+        try:
+            if allow_private_source_urls:
+                download_epg_source(
+                    source_url,
+                    source_path,
+                    allow_private_source_urls=True,
+                )
+            else:
+                download_epg_source(source_url, source_path)
         except Exception:  # noqa: BLE001 - degraded source behavior by design
             failed_sources.append(source_url)
             cached_path = _cached_source_path(source_id, source_url, work_dir)
@@ -76,6 +93,67 @@ def sync_epg(
         matched_channels=summary.matched_channel_count,
         programmes=summary.programme_count,
         failed_sources=failed_sources,
+        channel_icons=icons,
+    )
+
+
+def sync_epg_from_cache(
+    *,
+    published_channels: list[dict[str, object]],
+    epg_sources: list[dict[str, object]],
+    output_path: Path,
+    work_dir: Path,
+    allow_private_source_urls: bool = False,
+) -> EpgSyncResult:
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    source_paths: dict[str, Path] = {}
+    skipped_sources: list[str] = []
+
+    for source in epg_sources:
+        if not bool(source.get("enabled", True)):
+            continue
+
+        source_id = int(source["id"])
+        source_url = str(source["source_url"])
+        source_key = f"source-{source_id}"
+        try:
+            validate_public_source_url(
+                source_url,
+                allow_private_source_urls=allow_private_source_urls,
+            )
+        except ValueError:
+            skipped_sources.append(source_url)
+            continue
+        cached = _cached_source_path(source_id, source_url, work_dir)
+        if cached is None:
+            skipped_sources.append(source_url)
+            continue
+        source_paths[source_key] = cached
+
+    default_source_order = [
+        f"source-{int(source['id'])}"
+        for source in epg_sources
+        if bool(source.get("enabled", True)) and f"source-{int(source['id'])}" in source_paths
+    ]
+
+    summary = trim_xmltv_with_source_strategies(
+        published_channels=published_channels,
+        sources=source_paths,
+        default_source_order=default_source_order,
+        output_xmltv_path=output_path,
+    )
+
+    _inject_channel_icons(output_path, published_channels)
+
+    icons = collect_channel_epg_icons(published_channels, work_dir)
+    if icons:
+        _save_epg_icon_cache(icons, work_dir)
+    return EpgSyncResult(
+        changed=True,
+        matched_channels=summary.matched_channel_count,
+        programmes=summary.programme_count,
+        failed_sources=skipped_sources,
         channel_icons=icons,
     )
 
@@ -121,11 +199,32 @@ def _inject_channel_icons(output_path: Path, published_channels: list[dict[str, 
         os.chmod(str(output_path), 0o644)
 
 
-def fetch_source(*, source_url: str, source_id: int, work_dir: Path) -> dict[str, object]:
+def fetch_source(
+    *,
+    source_url: str,
+    source_id: int,
+    work_dir: Path,
+    allow_private_source_urls: bool = False,
+) -> dict[str, object]:
     work_dir.mkdir(parents=True, exist_ok=True)
     source_path = work_dir / f"source-{source_id}.xmltv"
     try:
-        download_epg_source(source_url, source_path)
+        validate_public_source_url(
+            source_url,
+            allow_private_source_urls=allow_private_source_urls,
+        )
+    except ValueError:
+        raise
+
+    try:
+        if allow_private_source_urls:
+            download_epg_source(
+                source_url,
+                source_path,
+                allow_private_source_urls=True,
+            )
+        else:
+            download_epg_source(source_url, source_path)
     except Exception:  # noqa: BLE001 - preview should use last loaded source when possible
         cached_path = _cached_source_path(source_id, source_url, work_dir)
         if cached_path is None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import gzip
 from pathlib import Path
 
-from app.admin_epg import sync_epg
+from app.admin_epg import sync_epg, sync_epg_from_cache
 
 
 def test_sync_epg_returns_selected_channel_icons(tmp_path: Path, monkeypatch) -> None:
@@ -161,6 +161,60 @@ def test_sync_epg_uses_cached_legacy_source_when_download_fails(
     assert result.matched_channels == 1
     assert result.programmes == 1
     assert result.channel_icons == {1: "http://epg.example/cached-icon.png"}
+
+
+def test_sync_epg_skips_private_source_url_without_downloading(
+    tmp_path: Path, monkeypatch
+) -> None:
+    output_path = tmp_path / "published" / "epg.xml"
+    work_dir = tmp_path / "epg"
+    calls: list[str] = []
+
+    def fail_download(source_url: str, destination: Path) -> None:
+        del destination
+        calls.append(source_url)
+        raise OSError("should not download private source")
+
+    monkeypatch.setattr("app.admin_epg.download_epg_source", fail_download)
+
+    result = sync_epg(
+        published_channels=[{"channel_id": 1, "name": "Private", "mappings": []}],
+        epg_sources=[{"id": 1, "source_url": "http://localhost/epg.xml", "enabled": True}],
+        output_path=output_path,
+        work_dir=work_dir,
+    )
+
+    assert result.failed_sources == ["http://localhost/epg.xml"]
+    assert calls == []
+
+
+def test_sync_epg_from_cache_skips_private_source_cache(tmp_path: Path) -> None:
+    output_path = tmp_path / "published" / "epg.xml"
+    work_dir = tmp_path / "epg"
+    work_dir.mkdir(parents=True)
+    (work_dir / "source-1.xmltv").write_text(
+        "<?xml version='1.0' encoding='UTF-8'?><tv>"
+        "<channel id='private-one'><display-name>Private One</display-name></channel>"
+        "<programme channel='private-one' start='20260504000000 +0000' stop='20260504010000 +0000'>"
+        "<title>Show</title></programme></tv>",
+        encoding="utf-8",
+    )
+
+    result = sync_epg_from_cache(
+        published_channels=[
+            {
+                "channel_id": 1,
+                "name": "Private One",
+                "mappings": [{"source_key": "source-1", "channel_id": "private-one"}],
+            }
+        ],
+        epg_sources=[{"id": 1, "source_url": "http://private.localhost/epg.xml", "enabled": True}],
+        output_path=output_path,
+        work_dir=work_dir,
+    )
+
+    assert result.failed_sources == ["http://private.localhost/epg.xml"]
+    assert result.matched_channels == 0
 
 
 def test_fetch_source_downloads_and_returns_channel_list(

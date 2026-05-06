@@ -627,6 +627,39 @@ def test_epg_sources_ui_has_live_job_feedback_and_refresh_hooks(tmp_path: Path) 
     assert "Action failed" in body
 
 
+def test_channel_editor_epg_search_builds_options_without_inner_html(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    store.import_channels(
+        [
+            {
+                "name": "Channel One",
+                "group_name": "News",
+                "stream_url": "http://provider.invalid/one",
+                "tvg_id": "chan-1",
+                "tvg_name": "Channel One",
+                "tvg_logo": "",
+                "tvg_rec": "",
+            }
+        ]
+    )
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+        ),
+    )
+    app = build_test_server(store, service)
+
+    status, _, body = app("GET", f"/ui/channels/{store.list_channels()[0].id}", None)
+
+    assert status == 200
+    assert "new Option(" in body
+    assert "payload.channels.map(ch => `<option" not in body
+    assert "`<option value=" not in body
+
+
 def test_locked_database_returns_controlled_unavailable_response(tmp_path: Path, monkeypatch) -> None:
     store = AdminStore(tmp_path / "playlist.db")
     store.initialize()

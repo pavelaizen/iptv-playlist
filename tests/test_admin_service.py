@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.admin_service import AdminService, AdminServiceSettings, _parse_xmltv_channel_cache
 from app.admin_store import AdminStore
@@ -222,9 +223,115 @@ def test_rebuild_playlist_publishes_multiple_enabled_variants(tmp_path: Path, mo
     store = AdminStore(tmp_path / "playlist.db")
     store.initialize()
     channel_id = seed_channel(store)
-    store.add_stream_variant(channel_id, {"label": "HD", "url": "http://provider.invalid/hd"})
+    hd = store.add_stream_variant(channel_id, {"label": "HD", "url": "http://provider.invalid/hd"})
     disabled = store.add_stream_variant(channel_id, {"label": "Broken", "url": "http://provider.invalid/broken"})
     store.update_stream_variant(disabled.id, {"enabled": False})
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+        ),
+    )
+    monkeypatch.setattr(service, "_probe_variants", lambda variants: {variant.id: True for variant in variants})
+    assert service.validate_all(trigger_type="manual")["status"] == "ok"
+    monkeypatch.setattr(service, "_sync_epg", lambda: {"changed": False, "matched_channels": 0, "programmes": 0})
+    monkeypatch.setattr(service, "_refresh_emby", lambda: None)
+
+    result = service.rebuild_playlist(trigger_type="manual")
+
+    playlist = (tmp_path / "published" / "playlist_emby_clean.m3u8").read_text(encoding="utf-8")
+    assert result["status"] == "ok"
+    assert "Channel One\n" in playlist
+    assert "Channel One HD" in playlist
+    assert "Broken" not in playlist
+    assert playlist.count("Channel One") == 2
+    assert "http://provider.invalid/hd" in playlist
+    assert hd.id
+
+
+def test_rebuild_playlist_keeps_live_primary_url_when_draft_url_is_unvalidated(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    channel_id = seed_channel(store)
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+        ),
+    )
+    store.update_channel(
+        channel_id,
+        {
+            "name": "Channel One Edited",
+            "group_name": "News",
+            "stream_url": "http://provider.invalid/broken",
+            "tvg_id": "chan-1-edited",
+            "tvg_name": "Channel One Edited",
+            "tvg_logo": "",
+            "tvg_rec": "3",
+            "enabled": True,
+        },
+    )
+    monkeypatch.setattr(service, "_sync_epg", lambda: {"changed": False, "matched_channels": 0, "programmes": 0})
+    monkeypatch.setattr(service, "_refresh_emby", lambda: None)
+
+    result = service.rebuild_playlist(trigger_type="manual")
+
+    playlist = (tmp_path / "published" / "playlist_emby_clean.m3u8").read_text(encoding="utf-8")
+    assert result["status"] == "ok"
+    assert "Channel One\n" in playlist
+    assert "Channel One Edited" not in playlist
+    assert "http://provider.invalid/one" in playlist
+    assert "http://provider.invalid/broken" not in playlist
+
+
+def test_rebuild_playlist_keeps_valid_variant_url_when_variant_edit_is_unvalidated(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    channel_id = seed_channel(store)
+    hd = store.add_stream_variant(channel_id, {"label": "HD", "url": "http://provider.invalid/hd"})
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+        ),
+    )
+    monkeypatch.setattr(service, "_probe_variants", lambda variants: {variant.id: True for variant in variants})
+    assert service.validate_all(trigger_type="manual")["status"] == "ok"
+    store.update_stream_variant(
+        hd.id,
+        {
+            "label": "HD",
+            "url": "http://provider.invalid/broken-hd",
+            "enabled": True,
+        },
+    )
+    monkeypatch.setattr(service, "_sync_epg", lambda: {"changed": False, "matched_channels": 0, "programmes": 0})
+    monkeypatch.setattr(service, "_refresh_emby", lambda: None)
+
+    result = service.rebuild_playlist(trigger_type="manual")
+
+    playlist = (tmp_path / "published" / "playlist_emby_clean.m3u8").read_text(encoding="utf-8")
+    assert result["status"] == "ok"
+    assert "Channel One HD" in playlist
+    assert "http://provider.invalid/hd" in playlist
+    assert "http://provider.invalid/broken-hd" not in playlist
+
+
+def test_rebuild_playlist_does_not_publish_unvalidated_new_variant(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    channel_id = seed_channel(store)
+    store.add_stream_variant(channel_id, {"label": "HD", "url": "http://provider.invalid/hd"})
     service = AdminService(
         store,
         AdminServiceSettings(
@@ -239,10 +346,40 @@ def test_rebuild_playlist_publishes_multiple_enabled_variants(tmp_path: Path, mo
 
     playlist = (tmp_path / "published" / "playlist_emby_clean.m3u8").read_text(encoding="utf-8")
     assert result["status"] == "ok"
-    assert "Channel One Orig" in playlist
-    assert "Channel One HD" in playlist
-    assert "Broken" not in playlist
-    assert playlist.count("Channel One") == 2
+    assert "Channel One\n" in playlist
+    assert "Channel One HD" not in playlist
+    assert "http://provider.invalid/hd" not in playlist
+
+
+def test_sync_epg_uses_base_live_name_for_original_variant(tmp_path: Path, monkeypatch) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    seed_channel(store)
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def fake_sync_epg(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            changed=True,
+            matched_channels=0,
+            programmes=0,
+            failed_sources=[],
+            channel_icons={},
+        )
+
+    monkeypatch.setattr("app.admin_service.sync_epg", fake_sync_epg)
+
+    result = service._sync_epg()
+
+    assert result["changed"] is True
+    assert captured["published_channels"][0]["name"] == "Channel One"
 
 
 def test_validate_all_updates_status_without_rebuilding_outputs(tmp_path: Path, monkeypatch) -> None:

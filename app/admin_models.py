@@ -53,6 +53,8 @@ class ChannelStreamVariant:
     last_stability_speed: str = ""
     last_stability_frames: int = 0
     last_stability_at: str | None = None
+    live_label: str | None = None
+    live_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

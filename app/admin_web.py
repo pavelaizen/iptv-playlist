@@ -164,7 +164,7 @@ def render_channels_page(channels, epg_icons=None) -> str:
           <input id="channel-filter" type="search" placeholder="Search channels">
           <button data-action="validate-all">Validate all channels</button>
           <button data-action="reload-epg-sources">Reload EPG</button>
-          <button data-action="rebuild-epg">Rebuild EPG</button>
+          <button data-action="publish">Publish</button>
           <button id="save-order" data-action="save-channel-order" hidden>Save order</button>
         </div>
         <table id="channels-table">
@@ -625,7 +625,7 @@ document.addEventListener('click', async (event) => {{
   try {{
     if (action === 'validate-all') watchJob(await api('/api/jobs/validate-all', {{method:'POST'}}), {{button, refresh: refreshChannelsPage}});
     if (action === 'reload-epg-sources') watchJob(await api('/api/jobs/reload-epg-sources', {{method:'POST'}}), {{button, refresh: refreshEpgSources}});
-    if (action === 'rebuild-epg') watchJob(await api('/api/jobs/rebuild-epg', {{method:'POST'}}), {{button, refresh: refreshChannelsPage}});
+    if (action === 'publish') watchJob(await api('/api/jobs/publish', {{method:'POST'}}), {{button, refresh: refreshChannelsPage}});
     if (action === 'validate-channel') watchJob(await api('/api/jobs/validate-channel/' + id, {{method:'POST'}}), {{button, refresh: refreshChannelsPage}});
     if (action === 'validate-stream') watchJob(await api('/api/jobs/validate-stream/' + id, {{method:'POST'}}), {{button, refresh: () => refreshChannelEditor(document.getElementById('channel-form')?.dataset.channelId)}});
     if (action === 'test-stream-stability') watchJob(await api('/api/jobs/validate-stream-extended/' + id, {{method:'POST'}}), {{button, refresh: () => refreshChannelEditor(document.getElementById('channel-form')?.dataset.channelId)}});
@@ -754,7 +754,9 @@ document.getElementById('epg-search')?.addEventListener('input', async (event) =
   const source = document.getElementById('epg-source-picker').value;
   const picker = document.getElementById('epg-channel-picker');
   const payload = await api('/api/epg-sources/' + source + '/channels?q=' + encodeURIComponent(event.target.value));
-  picker.innerHTML = payload.channels.map(ch => `<option value="${{ch.epg_channel_id}}">${{ch.display_name}} (${{ch.epg_channel_id}})</option>`).join('');
+  picker.replaceChildren(...(payload.channels || []).map(ch =>
+    new Option(`${{ch.display_name}} (${{ch.epg_channel_id}})`, ch.epg_channel_id)
+  ));
 }});
 let epgpwTimer = null;
 document.getElementById('epgpw-search')?.addEventListener('input', async (event) => {{
@@ -762,23 +764,23 @@ document.getElementById('epgpw-search')?.addEventListener('input', async (event)
   const picker = document.getElementById('epgpw-picker');
   const btn = document.getElementById('epgpw-add');
   if (epgpwTimer) clearTimeout(epgpwTimer);
-  if (q.length < 2) {{ picker.innerHTML = ''; btn.disabled = true; return; }}
+  if (q.length < 2) {{ picker.replaceChildren(); btn.disabled = true; return; }}
   btn.disabled = true;
-  picker.innerHTML = '<option>Searching...</option>';
+  picker.replaceChildren(new Option('Searching...', ''));
   epgpwTimer = setTimeout(async () => {{
     try {{
       const payload = await api('/api/epgpw/search?q=' + encodeURIComponent(q));
       const results = payload.results || [];
       if (results.length === 0) {{
-        picker.innerHTML = '<option>No results</option>';
+        picker.replaceChildren(new Option('No results', ''));
       }} else {{
-        picker.innerHTML = results.map(r =>
-          `<option value="${{r.channel_id}}">${{r.display_name}}${{r.country ? ' [' + r.country + ']' : ''}} (${{r.channel_id}})</option>`
-        ).join('');
+        picker.replaceChildren(...results.map(r =>
+          new Option(`${{r.display_name}}${{r.country ? ' [' + r.country + ']' : ''}} (${{r.channel_id}})`, r.channel_id)
+        ));
         btn.disabled = false;
       }}
     }} catch (e) {{
-      picker.innerHTML = '<option>Search failed</option>';
+      picker.replaceChildren(new Option('Search failed', ''));
     }}
   }}, 400);
 }});
@@ -995,6 +997,8 @@ def _dispatch_request_checked(store, service, method: str, path: str, query: dic
         return _json_response(service.start_rebuild_playlist_job("manual"), status=202)
     if method == "POST" and path == "/api/jobs/rebuild-epg":
         return _json_response(service.start_rebuild_epg_job("manual"), status=202)
+    if method == "POST" and path == "/api/jobs/publish":
+        return _json_response(service.start_publish_job(), status=202)
     if method == "GET" and path.startswith("/api/jobs/"):
         return _json_response(service.get_job(path.rsplit("/", 1)[1]))
 

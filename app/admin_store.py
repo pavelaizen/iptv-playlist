@@ -73,6 +73,16 @@ CREATE TABLE IF NOT EXISTS channel_stream_variants (
     FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS channel_stream_variant_live_snapshots (
+    stream_id INTEGER PRIMARY KEY,
+    channel_id INTEGER NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL,
+    validated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(stream_id) REFERENCES channel_stream_variants(id) ON DELETE CASCADE,
+    FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS epg_sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     display_name TEXT NOT NULL,
@@ -193,25 +203,60 @@ class AdminStore:
                 )
 
         existing_variant_count = conn.execute("SELECT COUNT(*) FROM channel_stream_variants").fetchone()[0]
-        if existing_variant_count:
-            return
-        channel_rows = conn.execute(
-            """
-            SELECT id, stream_url
-            FROM channels
-            ORDER BY display_order, id
-            """
-        ).fetchall()
-        for channel_id, stream_url in channel_rows:
-            conn.execute(
+        if not existing_variant_count:
+            channel_rows = conn.execute(
                 """
-                INSERT INTO channel_stream_variants (
-                    channel_id, label, url, display_order, enabled, last_probe_status
+                SELECT id, stream_url
+                FROM channels
+                ORDER BY display_order, id
+                """
+            ).fetchall()
+            for channel_id, stream_url in channel_rows:
+                conn.execute(
+                    """
+                    INSERT INTO channel_stream_variants (
+                        channel_id, label, url, display_order, enabled, last_probe_status
+                    )
+                    VALUES (?, 'Orig', ?, 0, 1, 'new')
+                    """,
+                    (channel_id, stream_url),
                 )
-                VALUES (?, 'Orig', ?, 0, 1, 'new')
-                """,
-                (channel_id, stream_url),
+        self._backfill_stream_variant_live_snapshots(conn)
+
+    def _backfill_stream_variant_live_snapshots(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO channel_stream_variant_live_snapshots (
+                stream_id, channel_id, label, url
             )
+            SELECT variant.id, variant.channel_id, variant.label, live.stream_url
+            FROM channel_stream_variants variant
+            JOIN channels channel ON channel.id = variant.channel_id
+            JOIN channel_live_snapshots live ON live.channel_id = variant.channel_id
+            WHERE variant.id = (
+                SELECT first_variant.id
+                FROM channel_stream_variants first_variant
+                WHERE first_variant.channel_id = variant.channel_id
+                ORDER BY first_variant.display_order, first_variant.id
+                LIMIT 1
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO channel_stream_variant_live_snapshots (
+                stream_id, channel_id, label, url
+            )
+            SELECT id, channel_id, label, url
+            FROM channel_stream_variants variant
+            WHERE last_probe_status = 'valid'
+              AND EXISTS (
+                  SELECT 1
+                  FROM channels channel
+                  WHERE channel.id = variant.channel_id
+              )
+            """
+        )
 
     def seed_default_epg_sources(self, defaults: list[tuple[str, str]]) -> None:
         with self._connect() as conn:
@@ -284,7 +329,7 @@ class AdminStore:
                     """,
                     (channel_id,),
                 )
-                conn.execute(
+                variant_cursor = conn.execute(
                     """
                     INSERT INTO channel_stream_variants (
                         channel_id, label, url, display_order, enabled, last_probe_status
@@ -293,11 +338,21 @@ class AdminStore:
                     """,
                     (channel_id, row["stream_url"]),
                 )
+                stream_id = int(variant_cursor.lastrowid)
+                conn.execute(
+                    """
+                    INSERT INTO channel_stream_variant_live_snapshots (
+                        stream_id, channel_id, label, url
+                    )
+                    VALUES (?, ?, 'Orig', ?)
+                    """,
+                    (stream_id, channel_id, row["stream_url"]),
+                )
 
     def add_channel(self, payload: dict[str, object]) -> ChannelDraft:
         with self._connect() as conn:
             next_order = conn.execute("SELECT COALESCE(MAX(display_order), -1) + 1 FROM channels").fetchone()[0]
-            stream_url = str(payload.get("stream_url") or payload.get("url") or "")
+            stream_url = str(payload.get("stream_url") or payload.get("url") or "").strip()
             cursor = conn.execute(
                 """
                 INSERT INTO channels (
@@ -319,25 +374,6 @@ class AdminStore:
                 ),
             )
             channel_id = int(cursor.lastrowid)
-            conn.execute(
-                """
-                INSERT INTO channel_live_snapshots (
-                    channel_id, name, group_name, stream_url,
-                    tvg_id, tvg_name, tvg_logo, tvg_rec, validated_version
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-                """,
-                (
-                    channel_id,
-                    str(payload["name"]),
-                    str(payload.get("group_name") or payload.get("group_title") or ""),
-                    stream_url,
-                    str(payload.get("tvg_id", "")),
-                    str(payload.get("tvg_name", "")),
-                    str(payload.get("tvg_logo") or payload.get("logo") or ""),
-                    str(payload.get("tvg_rec", "")),
-                ),
-            )
             conn.execute(
                 """
                 INSERT INTO channel_validation_states (
@@ -521,11 +557,6 @@ class AdminStore:
                 (normalized_url,),
             ).fetchone()
             if existing is not None:
-                if enabled:
-                    conn.execute(
-                        "UPDATE epg_sources SET enabled = 1 WHERE id = ? AND enabled = 0",
-                        (existing[0],),
-                    )
                 return self.get_epg_source(int(existing[0]))
             next_priority = conn.execute(
                 "SELECT COALESCE(MAX(priority), -1) + 1 FROM epg_sources"
@@ -790,17 +821,24 @@ class AdminStore:
 
     def list_stream_variants(self, channel_id: int | None = None) -> list[ChannelStreamVariant]:
         sql = """
-            SELECT id, channel_id, label, url, display_order, enabled,
-                   last_probe_status, last_probe_error, last_probe_at,
-                   last_stability_status, last_stability_error,
-                   last_stability_speed, last_stability_frames, last_stability_at
-            FROM channel_stream_variants
+            SELECT variant.id, variant.channel_id, variant.label, variant.url,
+                   variant.display_order, variant.enabled,
+                   variant.last_probe_status, variant.last_probe_error,
+                   variant.last_probe_at,
+                   variant.last_stability_status, variant.last_stability_error,
+                   variant.last_stability_speed, variant.last_stability_frames,
+                   variant.last_stability_at,
+                   live.label AS live_label,
+                   live.url AS live_url
+            FROM channel_stream_variants variant
+            LEFT JOIN channel_stream_variant_live_snapshots live
+                ON live.stream_id = variant.id
         """
         params: tuple[object, ...] = ()
         if channel_id is not None:
-            sql += " WHERE channel_id = ?"
+            sql += " WHERE variant.channel_id = ?"
             params = (channel_id,)
-        sql += " ORDER BY channel_id, display_order, id"
+        sql += " ORDER BY variant.channel_id, variant.display_order, variant.id"
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(sql, params).fetchall()
@@ -820,6 +858,8 @@ class AdminStore:
                 last_stability_speed=row["last_stability_speed"],
                 last_stability_frames=row["last_stability_frames"],
                 last_stability_at=row["last_stability_at"],
+                live_label=row["live_label"],
+                live_url=row["live_url"],
             )
             for row in rows
         ]
@@ -848,7 +888,7 @@ class AdminStore:
                 (
                     channel_id,
                     str(payload.get("label") or "Variant"),
-                    str(payload["url"]),
+                    str(payload["url"]).strip(),
                     int(payload.get("display_order", next_order)),
                     int(bool(payload.get("enabled", True))),
                 ),
@@ -866,8 +906,8 @@ class AdminStore:
 
     def update_stream_variant(self, stream_id: int, payload: dict[str, object]) -> ChannelStreamVariant:
         current = self.get_stream_variant(stream_id)
-        label = str(payload.get("label", current.label))
-        url = str(payload.get("url", current.url))
+        label = str(payload.get("label", current.label)).strip()
+        url = str(payload.get("url", current.url)).strip()
         enabled = bool(payload.get("enabled", current.enabled))
         with self._connect() as conn:
             conn.execute(
@@ -974,7 +1014,22 @@ class AdminStore:
                 (status, error_text[:300], speed[:30], int(frames), stream_id),
             )
 
-    def replace_live_snapshot(self, channel_id: int, draft: ChannelDraft) -> None:
+    def replace_live_snapshot(
+        self,
+        channel_id: int,
+        draft: ChannelDraft,
+        valid_variants: list[ChannelStreamVariant] | None = None,
+    ) -> None:
+        variants = sorted(valid_variants or [], key=lambda variant: (variant.display_order, variant.id))
+        primary_variant = next((variant for variant in variants if variant.display_order == 0), None)
+        if primary_variant is not None:
+            snapshot_stream_url = primary_variant.url
+        elif draft.live_snapshot is not None:
+            snapshot_stream_url = draft.live_snapshot.stream_url
+        elif variants:
+            snapshot_stream_url = variants[0].url
+        else:
+            snapshot_stream_url = draft.stream_url
         with self._connect() as conn:
             conn.execute(
                 """
@@ -998,7 +1053,7 @@ class AdminStore:
                     channel_id,
                     draft.name,
                     draft.group_name,
-                    draft.stream_url,
+                    snapshot_stream_url,
                     draft.tvg_id,
                     draft.tvg_name,
                     draft.tvg_logo,
@@ -1018,6 +1073,23 @@ class AdminStore:
                 WHERE channel_id = ?
                 """,
                 (draft.draft_version, channel_id),
+            )
+            conn.executemany(
+                """
+                INSERT INTO channel_stream_variant_live_snapshots (
+                    stream_id, channel_id, label, url
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(stream_id) DO UPDATE SET
+                    channel_id = excluded.channel_id,
+                    label = excluded.label,
+                    url = excluded.url,
+                    validated_at = CURRENT_TIMESTAMP
+                """,
+                [
+                    (variant.id, channel_id, variant.label, variant.url)
+                    for variant in variants
+                ],
             )
 
     def mark_channel_invalid(self, channel_id: int, draft_version: int, error_text: str) -> None:

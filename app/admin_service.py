@@ -8,14 +8,13 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 
-from app.admin_epg import sync_epg, collect_channel_epg_icons
+from app.admin_epg import sync_epg, sync_epg_from_cache, collect_channel_epg_icons
 from app.admin_m3u import render_playlist
 from app.admin_models import ChannelDraft, ChannelSnapshot, ChannelStreamVariant
 from app.admin_store import AdminStore
 from app.emby_client import refresh_livetv_after_publish
-from app.epg_sources import download_epg_source, search_epgpw_channels
+from app.epg_sources import download_epg_source, search_epgpw_channels, validate_public_source_url
 from app.probe import ProbeSettings, ProbeTarget, probe_channels
 from app.publish import PublishGuardConfig, select_playlist_for_publish
 from app.stream_stability import run_stream_stability_test
@@ -62,7 +61,7 @@ class AdminService:
             probe_results = {variant.id: channel_valid for variant in variants}
         else:
             probe_results = self._probe_variants(variants)
-        any_valid = False
+        valid_variants: list[ChannelStreamVariant] = []
         for variant in variants:
             valid = probe_results.get(variant.id, False)
             self.store.mark_stream_variant_probe_result(
@@ -70,12 +69,13 @@ class AdminService:
                 status="valid" if valid else "invalid",
                 error_text="" if valid else "ffprobe failed",
             )
-            any_valid = any_valid or valid
-        if not any_valid:
+            if valid:
+                valid_variants.append(variant)
+        if not valid_variants:
             self.store.mark_channel_invalid(channel_id, draft.draft_version, "ffprobe failed")
             return {"status": "invalid", "channel_id": channel_id}
 
-        self.store.replace_live_snapshot(channel_id, draft)
+        self.store.replace_live_snapshot(channel_id, draft, valid_variants)
         return {"status": "valid", "channel_id": channel_id, "publish": {"status": "not_run"}}
 
     def validate_all(self, trigger_type: str) -> dict[str, object]:
@@ -102,7 +102,7 @@ class AdminService:
             invalid_count = 0
             for draft in drafts:
                 variants = [variant for variant in enabled_variants if variant.channel_id == draft.id]
-                channel_valid = False
+                valid_variants: list[ChannelStreamVariant] = []
                 for variant in variants:
                     valid = variant_results.get(variant.id, False)
                     self.store.mark_stream_variant_probe_result(
@@ -110,9 +110,10 @@ class AdminService:
                         status="valid" if valid else "invalid",
                         error_text="" if valid else "ffprobe failed",
                     )
-                    channel_valid = channel_valid or valid
-                if channel_valid:
-                    self.store.replace_live_snapshot(draft.id, draft)
+                    if valid:
+                        valid_variants.append(variant)
+                if valid_variants:
+                    self.store.replace_live_snapshot(draft.id, draft, valid_variants)
                     valid_count += 1
                 else:
                     self.store.mark_channel_invalid(draft.id, draft.draft_version, "ffprobe failed")
@@ -163,6 +164,16 @@ class AdminService:
             if publish_result["publish_candidate"] and publish_result["content_changed"]:
                 self._refresh_emby()
         epg_result = self._sync_epg()
+        return {"status": "ok", "playlist": publish_result, "epg": epg_result}
+
+    def publish_from_cache(self) -> dict[str, object]:
+        with self._publish_lock:
+            snapshots = self._capture_publish_snapshots()
+            candidate_content = render_playlist(snapshots)
+            publish_result = self._publish_candidate_playlist(candidate_content)
+            if publish_result["publish_candidate"] and publish_result["content_changed"]:
+                self._refresh_emby()
+        epg_result = self._sync_epg_from_cache()
         return {"status": "ok", "playlist": publish_result, "epg": epg_result}
 
     def delete_epg_source_and_rebuild(self, source_id: int) -> dict[str, object]:
@@ -216,33 +227,36 @@ class AdminService:
         epg_tvg_ids = self._load_epg_tvg_ids_for_drafts(drafts)
         snapshots: list[ChannelSnapshot] = []
         for draft in drafts:
+            live = draft.live_snapshot
+            if live is None:
+                continue
             for variant in self.store.list_stream_variants(draft.id):
-                if not variant.enabled:
+                if not variant.enabled or not variant.live_url:
                     continue
-                display_name = self._variant_display_name(draft, variant)
-                tvg_logo = draft.tvg_logo or epg_icons.get(draft.id, "")
-                tvg_id = epg_tvg_ids.get(draft.id, "") or draft.tvg_id
+                display_name = self._variant_display_name(live.name, variant.live_label or variant.label)
+                tvg_logo = live.tvg_logo or epg_icons.get(draft.id, "")
+                tvg_id = epg_tvg_ids.get(draft.id, "") or live.tvg_id
                 snapshots.append(
                     ChannelSnapshot(
                         name=display_name,
-                        group_name=draft.group_name,
-                        stream_url=variant.url,
+                        group_name=live.group_name,
+                        stream_url=variant.live_url,
                         tvg_id=tvg_id,
-                        tvg_name=draft.tvg_name or display_name,
+                        tvg_name=live.tvg_name or display_name,
                         tvg_logo=tvg_logo,
-                        tvg_rec=draft.tvg_rec,
-                        validated_version=draft.draft_version,
+                        tvg_rec=live.tvg_rec,
+                        validated_version=live.validated_version,
                     )
                 )
         return snapshots
 
-    def _variant_display_name(self, draft: ChannelDraft, variant: ChannelStreamVariant) -> str:
-        label = variant.label.strip()
-        if not label:
-            return draft.name
-        if draft.name.casefold().endswith(f" {label}".casefold()):
-            return draft.name
-        return f"{draft.name} {label}"
+    def _variant_display_name(self, base_name: str, label: str) -> str:
+        label = label.strip()
+        if not label or label.casefold() in {"orig", "original", "default"}:
+            return base_name
+        if base_name.casefold().endswith(f" {label}".casefold()):
+            return base_name
+        return f"{base_name} {label}"
 
     def _epg_work_dir(self) -> Path:
         return self.settings.epg_work_dir or (self.settings.output_dir.parent / "state" / "epg")
@@ -345,20 +359,18 @@ class AdminService:
     def _probe_urls_is_overridden(self) -> bool:
         return getattr(self._probe_urls, "__func__", None) is not AdminService._probe_urls
 
-    def _sync_epg(self) -> dict[str, object]:
-        channels = []
-        for draft in self.store.list_channels():
-            if not draft.enabled:
+    def _capture_epg_channels(self) -> list[dict[str, object]]:
+        drafts = [draft for draft in self.store.list_channels() if draft.enabled and draft.live_snapshot is not None]
+        epg_icons = self._load_epg_icons_for_drafts(drafts)
+        channels: list[dict[str, object]] = []
+        for draft in drafts:
+            live = draft.live_snapshot
+            if live is None:
                 continue
-            enabled_variants = [variant for variant in self.store.list_stream_variants(draft.id) if variant.enabled]
-            if not enabled_variants:
-                continue
-            display_name = self._variant_display_name(draft, enabled_variants[0])
-            epg_icons = self._load_epg_icons_for_drafts([draft])
-            tvg_logo = draft.tvg_logo or epg_icons.get(draft.id, "")
+            tvg_logo = live.tvg_logo or epg_icons.get(draft.id, "")
             channels.append(
                 {
-                    "name": display_name,
+                    "name": live.name,
                     "channel_id": draft.id,
                     "tvg_logo": tvg_logo,
                     "mappings": [
@@ -371,7 +383,10 @@ class AdminService:
                     ],
                 }
             )
+        return channels
 
+    def _sync_epg(self) -> dict[str, object]:
+        channels = self._capture_epg_channels()
         epg_sources = self.store.list_enabled_epg_sources_payload()
         output_path = self.settings.output_dir / self.settings.output_epg_name
         work_dir = self.settings.epg_work_dir or (self.settings.output_dir.parent / "state" / "epg")
@@ -381,6 +396,7 @@ class AdminService:
             epg_sources=epg_sources,
             output_path=output_path,
             work_dir=work_dir,
+            allow_private_source_urls=self.settings.allow_private_source_urls,
         )
         return {
             "changed": result.changed,
@@ -388,6 +404,26 @@ class AdminService:
             "programmes": result.programmes,
             "failed_sources": result.failed_sources,
             "channel_icons": result.channel_icons,
+        }
+
+    def _sync_epg_from_cache(self) -> dict[str, object]:
+        channels = self._capture_epg_channels()
+        epg_sources = self.store.list_enabled_epg_sources_payload()
+        output_path = self.settings.output_dir / self.settings.output_epg_name
+        work_dir = self.settings.epg_work_dir or (self.settings.output_dir.parent / "state" / "epg")
+
+        result = sync_epg_from_cache(
+            published_channels=channels,
+            epg_sources=epg_sources,
+            output_path=output_path,
+            work_dir=work_dir,
+            allow_private_source_urls=self.settings.allow_private_source_urls,
+        )
+        return {
+            "changed": result.changed,
+            "matched_channels": result.matched_channels,
+            "programmes": result.programmes,
+            "skipped_sources": result.failed_sources,
         }
 
     def preview_channel_epg_programmes(
@@ -475,6 +511,9 @@ class AdminService:
     def start_rebuild_epg_job(self, trigger_type: str) -> dict[str, object]:
         return self._start_job("rebuild-epg", lambda: self.rebuild_epg(trigger_type))
 
+    def start_publish_job(self) -> dict[str, object]:
+        return self._start_job("publish", lambda: self.publish_from_cache())
+
     def start_reload_epg_source_job(self, source_id: int) -> dict[str, object]:
         return self._start_job("reload-epg-source", lambda: self.reload_epg_source(source_id))
 
@@ -524,6 +563,9 @@ class AdminService:
             status="valid" if result else "invalid",
             error_text="" if result else "ffprobe failed",
         )
+        if result:
+            draft = self.store.get_channel(variant.channel_id)
+            self.store.replace_live_snapshot(variant.channel_id, draft, [variant])
         return {"status": "valid" if result else "invalid", "stream_id": stream_id}
 
     def validate_stream_stability(self, stream_id: int) -> dict[str, object]:
@@ -572,16 +614,25 @@ class AdminService:
         source_url = f"https://epg.pw/api/epg.xml?channel_id={epgpw_channel_id}"
         source_name = f"epg.pw: {display_name}" if display_name else f"epg.pw channel {epgpw_channel_id}"
         source = self.store.ensure_epg_source(source_url, source_name)
+
+        def _extract_and_set_icon() -> str:
+            icon = self._extract_epg_source_icon(source.id, epgpw_channel_id)
+            if icon:
+                self.store.set_channel_logo_url(channel_id, icon)
+            return icon
+
         existing_mappings = self.store.list_channel_epg_mappings(channel_id)
         for m in existing_mappings:
             if (
                 int(m["epg_source_id"]) == source.id
                 and str(m["channel_xmltv_id"]) == epgpw_channel_id
             ):
+                icon_url = _extract_and_set_icon()
                 return {
                     "status": "duplicate",
                     "source_id": source.id,
                     "mapping_id": int(m["id"]),
+                    "icon_url": icon_url,
                 }
         next_priority = (
             max((int(m["priority"]) for m in existing_mappings), default=-1) + 1
@@ -593,12 +644,8 @@ class AdminService:
             epgpw_channel_id,
         )
 
-        icon_url = ""
-        reload_result = self.reload_epg_source(source.id)
-        if reload_result.get("status") == "ok":
-            icon_url = self._extract_epg_source_icon(source.id, epgpw_channel_id)
-            if icon_url:
-                self.store.set_channel_logo_url(channel_id, icon_url)
+        self.start_reload_epg_source_job(source.id)
+        icon_url = _extract_and_set_icon()
 
         rebuild_job = self._start_job(
             "epgpw-map-rebuild",
@@ -616,32 +663,18 @@ class AdminService:
         work_dir = self.settings.epg_work_dir or (self.settings.output_dir.parent / "state" / "epg")
         work_dir.mkdir(parents=True, exist_ok=True)
         destination = work_dir / f"source-{source_id}.xmltv"
-        download_epg_source(source_url, destination)
+        download_epg_source(
+            source_url,
+            destination,
+            allow_private_source_urls=self.settings.allow_private_source_urls,
+        )
         return destination
 
     def _validate_public_source_url(self, source_url: str) -> None:
-        parts = urlsplit(source_url)
-        if parts.scheme not in {"http", "https"}:
-            raise ValueError("EPG source URL must use http or https")
-        host = (parts.hostname or "").casefold()
-        if not host:
-            raise ValueError("EPG source URL is missing a host")
-        if host in {"localhost", "0.0.0.0"} or host.startswith("127."):
-            raise ValueError("EPG source URL host is not allowed")
-        if not self.settings.allow_private_source_urls and _is_private_host_literal(host):
-            raise ValueError("private EPG source URLs are disabled")
-
-
-def _is_private_host_literal(host: str) -> bool:
-    parts = host.split(".")
-    if len(parts) != 4 or not all(part.isdigit() for part in parts):
-        return False
-    octets = [int(part) for part in parts]
-    return (
-        octets[0] == 10
-        or (octets[0] == 172 and 16 <= octets[1] <= 31)
-        or (octets[0] == 192 and octets[1] == 168)
-    )
+        validate_public_source_url(
+            source_url,
+            allow_private_source_urls=self.settings.allow_private_source_urls,
+        )
 
 
 def _parse_xmltv_channel_cache(path: Path) -> list[dict[str, str]]:

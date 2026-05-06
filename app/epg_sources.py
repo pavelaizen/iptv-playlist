@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import gzip
+import ipaddress
 import os
 import re
 import shutil
@@ -15,6 +16,31 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 DEFAULT_EPGPW_TIMEZONE = "Asia/Jerusalem"
+
+
+def validate_public_source_url(
+    source_url: str,
+    *,
+    allow_private_source_urls: bool = False,
+) -> None:
+    parts = urlsplit(source_url)
+    if parts.scheme not in {"http", "https"}:
+        raise ValueError("EPG source URL must use http or https")
+    host = (parts.hostname or "").casefold()
+    if not host:
+        raise ValueError("EPG source URL is missing a host")
+    if host == "localhost" or host.endswith(".localhost"):
+        raise ValueError("EPG source URL host is not allowed")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return
+    if address.is_loopback or address.is_unspecified:
+        raise ValueError("EPG source URL host is not allowed")
+    if not allow_private_source_urls and (
+        address.is_private or address.is_link_local or address.is_multicast
+    ):
+        raise ValueError("private EPG source URLs are disabled")
 
 
 def canonicalize_epg_source_url(source_url: str) -> str:
@@ -76,7 +102,16 @@ def effective_epg_source_url(
     return urlunsplit(("https", "epg.pw", "/api/epg.xml", query, ""))
 
 
-def download_epg_source(source_url: str, destination: Path) -> str:
+def download_epg_source(
+    source_url: str,
+    destination: Path,
+    *,
+    allow_private_source_urls: bool = False,
+) -> str:
+    validate_public_source_url(
+        source_url,
+        allow_private_source_urls=allow_private_source_urls,
+    )
     effective_url = effective_epg_source_url(source_url)
     destination.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
