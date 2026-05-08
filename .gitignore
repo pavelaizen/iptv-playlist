@@ -3,11 +3,32 @@
 !.github/**
 .codex
 .venv-tools/
-published/*.tmp
-published/playlist_emby_clean.m3u
-published/playlist_emby_clean.m3u8
 __pycache__/
 *.py[cod]
 .pytest_cache/
-output/diagnostics/
-output/.playlist_sanitizer_state
+
+# Local secrets and machine-specific config
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+known_hosts
+authorized_keys
+
+# Private provider/runtime inputs
+original_playlist.m3u8
+
+# Generated runtime state and public artifacts
+output/
+published/
+
+# Local deployment/build archives
+*.tar
+*.tar.gz
+*.tgz

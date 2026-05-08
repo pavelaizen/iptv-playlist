@@ -12,7 +12,7 @@ Do not hardcode SSH targets, remote repo paths, passwords, or API keys into the 
 ## Required Inputs
 
 - SSH target such as `<user@host>`
-- Remote repo path such as `/volume1/docker/iptv-playlist`
+- Remote repo path such as `/absolute/remote/repo`
 - Whether the remote host has working `git`, `docker`, and `docker compose` on `PATH`
 
 ## Workflow
