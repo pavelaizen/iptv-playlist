@@ -23,6 +23,8 @@ authorized_keys
 
 # Private provider/runtime inputs
 original_playlist.m3u8
+playlist.m3u8
+playlist_normalized.m3u
 
 # Generated runtime state and public artifacts
 output/
