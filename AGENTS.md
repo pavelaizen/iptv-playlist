@@ -131,9 +131,9 @@ python -m compileall -q app tests
 docker compose up -d --build playlist-admin
 docker compose -f docker-compose.playlist.yml up -d playlist-static
 docker compose ps playlist-admin
-curl -I http://192.168.1.113:8766/playlist_emby_clean.m3u8
-curl -I http://192.168.1.113:8766/epg.xml
-curl -I http://192.168.1.113:8766/ui/channels
+curl -I "$NAS_PUBLIC_BASE_URL/playlist_emby_clean.m3u8"
+curl -I "$NAS_PUBLIC_BASE_URL/epg.xml"
+curl -I "$NAS_PUBLIC_BASE_URL/ui/channels"
 ./publish_emby_playlist.sh
 ```
 

@@ -329,12 +329,12 @@ Expected: no output.
 ### Task 6: Deploy and verify end-to-end on Synology
 
 **Files:**
-- Sync workspace to: `/volume1/docker/iptv-playlist`
+- Sync workspace to: `/absolute/remote/repo`
 
 - [ ] **Step 1: Deploy the updated code to Synology**
 
 Run: existing tar-over-SSH deployment flow used for this repo.
-Expected: remote code updated in `/volume1/docker/iptv-playlist`.
+Expected: remote code updated in the current-session remote repo path.
 
 - [ ] **Step 2: Rebuild/restart the Synology services**
 

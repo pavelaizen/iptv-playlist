@@ -22,22 +22,33 @@ Internet/LAN → :8766 (nginx) → /ui/*, /api/* → 127.0.0.1:8780 (admin)
 - Docker binary at `/usr/local/bin/docker` on Synology
 - Shell alias may be needed: `alias docker=/usr/local/bin/docker`
 
+## Session Variables
+
+Set these in the current shell before using the examples. Do not commit real
+hosts, users, passwords, provider URLs, or remote paths to this repo.
+
+```bash
+export NAS_SSH_TARGET="<user@nas-host>"
+export NAS_DEPLOY_DIR="/path/to/remote/iptv-playlist"
+export NAS_DOCKER_BIN="/usr/local/bin/docker"
+export NAS_PUBLIC_BASE_URL="http://<nas-host>:8766"
+```
+
 ## One-Time Setup
 
 ### 1. Prepare the NAS directory
 
 ```bash
-ssh titan18@192.168.1.113
-sudo mkdir -p /volume1/docker/iptv-playlist/published
-sudo mkdir -p /volume1/docker/iptv-playlist/output
-sudo chown -R titan18:users /volume1/docker/iptv-playlist
+ssh -t "$NAS_SSH_TARGET" \
+  "sudo mkdir -p '$NAS_DEPLOY_DIR/published' '$NAS_DEPLOY_DIR/output' && \
+   sudo chown -R '<nas-user>:<nas-group>' '$NAS_DEPLOY_DIR'"
 ```
 
 ### 2. Copy the subscription playlist
 
 ```bash
 # From dev machine, using base64 since SCP subystem may be broken on Synology:
-base64 original_playlist.m3u8 | ssh titan18@192.168.1.113 'base64 -d > /volume1/docker/iptv-playlist/original_playlist.m3u8'
+base64 original_playlist.m3u8 | ssh "$NAS_SSH_TARGET" "base64 -d > '$NAS_DEPLOY_DIR/original_playlist.m3u8'"
 ```
 
 SCP is often broken on Synology (`subsystem request failed`). Use base64 pipe or `rsync` instead.
@@ -50,29 +61,31 @@ The `app/` directory is bind-mounted read-only (`./app:/app/app:ro`). A containe
 
 ```bash
 # From repo root on dev machine:
-tar czf - -C /home/titan18/projects/iptv-playlist \
+tar czf - -C /path/to/local/iptv-playlist \
   app/ \
   docker-compose.yml \
   docker-compose.playlist.yml \
   nginx/playlist-static.conf \
-| ssh titan18@192.168.1.113 'cd /volume1/docker/iptv-playlist && tar xzf -'
+| ssh "$NAS_SSH_TARGET" "cd '$NAS_DEPLOY_DIR' && tar xzf -"
 
 # Restart containers:
-ssh titan18@192.168.1.113 \
-  'echo PASSWORD | sudo -S /usr/local/bin/docker restart playlist-admin playlist-static'
+ssh -t "$NAS_SSH_TARGET" \
+  "sudo '$NAS_DOCKER_BIN' restart playlist-admin playlist-static"
 ```
 
-**Password prompt:** Synology `sudo` requires the user's password piped via `-S`. Replace `PASSWORD` with the actual password. Use `sshpass -p 'PASSWORD'` to automate.
+**Password prompt:** Synology `sudo` may require an interactive password prompt.
+Use current-session environment variables or an SSH agent for automation; do not
+store passwords in scripts, docs, commits, or memory.
 
 ### Full deploy (Dockerfile changes — requires rebuild)
 
 **Important:** Synology DNS is often broken inside Docker builds for `apt-get`. If rebuilding fails with `Temporary failure resolving 'deb.debian.org'`, use the quick restart approach instead — the image is already built with ffmpeg.
 
 ```bash
-ssh titan18@192.168.1.113 \
-  'cd /volume1/docker/iptv-playlist && \
-   echo PASSWORD | sudo -S /usr/local/bin/docker compose up -d --force-recreate playlist-admin && \
-   echo PASSWORD | sudo -S /usr/local/bin/docker compose -f docker-compose.playlist.yml up -d --force-recreate playlist-static'
+ssh -t "$NAS_SSH_TARGET" \
+  "cd '$NAS_DEPLOY_DIR' && \
+   sudo '$NAS_DOCKER_BIN' compose up -d --force-recreate playlist-admin && \
+   sudo '$NAS_DOCKER_BIN' compose -f docker-compose.playlist.yml up -d --force-recreate playlist-static"
 ```
 
 Use `--force-recreate` (not just `restart`) when `docker-compose.yml` volumes or environment variables change. Plain `restart` does not pick up compose file changes.
@@ -108,11 +121,13 @@ If you need custom DNS (e.g., for provider hostnames that need `/etc/hosts` over
 2. Use the Synology DNS Server package to create local DNS records, or
 3. Switch back to bridge networking (but then you must fix the firewall issue).
 
-Currently, `extra_hosts` for `eqak8jqn.megogo.xyz` is **removed** from `docker-compose.yml`. If provider DNS resolution fails, add the mapping to Synology's `/etc/hosts`:
+Currently, provider-specific `extra_hosts` entries are **removed** from
+`docker-compose.yml`. If provider DNS resolution fails, add the mapping to
+Synology's `/etc/hosts` in the current session:
 
 ```bash
-ssh titan18@192.168.1.113 \
-  'echo "103.163.132.53 eqak8jqn.megogo.xyz" | sudo tee -a /etc/hosts'
+ssh -t "$NAS_SSH_TARGET" \
+  'echo "<provider-ip> <provider-host.example>" | sudo tee -a /etc/hosts'
 ```
 
 ### EPG source downloads
@@ -132,8 +147,8 @@ For `epg.pw` per-channel sources, the admin service stores a canonical date-free
 Containers run as root. Written files (playlist, EPG) get mode `600` by default. Nginx running in the static container needs read access. The app calls `os.chmod(path, 0o644)` after writing public files, but docker restarts may re-create files. If nginx returns 403:
 
 ```bash
-ssh titan18@192.168.1.113 \
-  'echo PASSWORD | sudo -S /usr/local/bin/docker exec playlist-admin chmod 644 /data/published/epg.xml /data/published/playlist_emby_clean.m3u8'
+ssh -t "$NAS_SSH_TARGET" \
+  "sudo '$NAS_DOCKER_BIN' exec playlist-admin chmod 644 /data/published/epg.xml /data/published/playlist_emby_clean.m3u8"
 ```
 
 ## Volume Mapping
@@ -154,32 +169,32 @@ Host path                              Container path           Mode
 
 ```bash
 # Check playlist is served
-curl -I http://192.168.1.113:8766/playlist_emby_clean.m3u8
+curl -I "$NAS_PUBLIC_BASE_URL/playlist_emby_clean.m3u8"
 
 # Check EPG is served
-curl -I http://192.168.1.113:8766/epg.xml
+curl -I "$NAS_PUBLIC_BASE_URL/epg.xml"
 
 # Check admin API
-curl http://192.168.1.113:8766/api/channels | python3 -m json.tool | head -20
+curl "$NAS_PUBLIC_BASE_URL/api/channels" | python3 -m json.tool | head -20
 
 # Check admin UI (returns HTML)
-curl -s http://192.168.1.113:8766/ui/channels | head -5
+curl -s "$NAS_PUBLIC_BASE_URL/ui/channels" | head -5
 
 # Direct admin API (bypasses nginx)
-ssh titan18@192.168.1.113 \
+ssh "$NAS_SSH_TARGET" \
   'curl -s http://localhost:8780/api/channels | python3 -m json.tool | head -20'
 
 # Check container status
-ssh titan18@192.168.1.113 \
-  'echo PASSWORD | sudo -S /usr/local/bin/docker ps --filter name=playlist'
+ssh -t "$NAS_SSH_TARGET" \
+  "sudo '$NAS_DOCKER_BIN' ps --filter name=playlist"
 
 # Check container logs
-ssh titan18@192.168.1.113 \
-  'echo PASSWORD | sudo -S /usr/local/bin/docker logs playlist-admin --tail=30'
+ssh -t "$NAS_SSH_TARGET" \
+  "sudo '$NAS_DOCKER_BIN' logs playlist-admin --tail=30"
 
 # Run Python inside the container
-ssh titan18@192.168.1.113 \
-  'echo PASSWORD | sudo -S /usr/local/bin/docker exec playlist-admin python3 -c "from app.admin_store import AdminStore; print(AdminStore(Path(\"/data/state/admin/playlist.db\")).channel_count())"'
+ssh -t "$NAS_SSH_TARGET" \
+  "sudo '$NAS_DOCKER_BIN' exec playlist-admin python3 -c 'from pathlib import Path; from app.admin_store import AdminStore; print(AdminStore(Path(\"/data/state/admin/playlist.db\")).channel_count())'"
 ```
 
 ## Common Issues
@@ -195,8 +210,8 @@ Full validation takes 3+ minutes (ffprobe probes all channels). nginx's `proxy_r
 ### Container can't reach provider URLs
 
 ```bash
-ssh titan18@192.168.1.113 \
-  'echo PASSWORD | sudo -S /usr/local/bin/docker exec playlist-admin python3 -c "import urllib.request; urllib.request.urlopen(\"http://eqak8jqn.megogo.xyz/\", timeout=10); print(\"OK\")"'
+ssh -t "$NAS_SSH_TARGET" \
+  "sudo '$NAS_DOCKER_BIN' exec playlist-admin python3 -c 'import urllib.request; urllib.request.urlopen(\"http://<provider-host.example>/\", timeout=10); print(\"OK\")'"
 ```
 
 If this fails, add the hostname to `/etc/hosts` on the Synology host.
@@ -216,13 +231,13 @@ Synology's SSH often has a broken SCP subsystem. Use these alternatives:
 
 ```bash
 # Pipe via base64 (works for small-ish files):
-base64 file.tar.gz | ssh titan18@192.168.1.113 'base64 -d > /tmp/file.tar.gz'
+base64 file.tar.gz | ssh "$NAS_SSH_TARGET" 'base64 -d > /tmp/file.tar.gz'
 
 # Pipe tar directly:
-tar czf - -C /local/path file1 file2 | ssh titan18@192.168.1.113 'cd /remote/path && tar xzf -'
+tar czf - -C /local/path file1 file2 | ssh "$NAS_SSH_TARGET" 'cd /remote/path && tar xzf -'
 
 # rsync over SSH:
-rsync -avz -e ssh file titan18@192.168.1.113:/remote/path/
+rsync -avz -e ssh file "$NAS_SSH_TARGET:/remote/path/"
 ```
 
 ## Full Deploy Script
@@ -232,22 +247,24 @@ Save as `deploy.sh` and run from the repo root:
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-REMOTE_HOST="titan18@192.168.1.113"
-REMOTE_DIR="/volume1/docker/iptv-playlist"
-SSH="sshpass -p '${DEPLOY_PASSWORD}' ssh -o StrictHostKeyChecking=no ${REMOTE_HOST}"
-DOCKER="echo '${DEPLOY_PASSWORD}' | sudo -S /usr/local/bin/docker"
+
+: "${NAS_SSH_TARGET:?Set NAS_SSH_TARGET for this session}"
+: "${NAS_DEPLOY_DIR:?Set NAS_DEPLOY_DIR for this session}"
+: "${NAS_DOCKER_BIN:=/usr/local/bin/docker}"
 
 # Transfer files
-tar czf - app/ docker-compose.yml docker-compose.playlist.yml nginx/ | ${SSH} "cd ${REMOTE_DIR} && tar xzf -"
+tar czf - app/ docker-compose.yml docker-compose.playlist.yml nginx/ \
+  | ssh "${NAS_SSH_TARGET}" "cd '${NAS_DEPLOY_DIR}' && tar xzf -"
 
 # Restart containers (code-only change)
-${SSH} "${DOCKER} restart playlist-admin playlist-static"
+ssh -t "${NAS_SSH_TARGET}" \
+  "sudo '${NAS_DOCKER_BIN}' restart playlist-admin playlist-static"
 
 # For compose file changes, use instead:
-# ${SSH} "cd ${REMOTE_DIR} && ${DOCKER} compose up -d --force-recreate playlist-admin && ${DOCKER} compose -f docker-compose.playlist.yml up -d --force-recreate playlist-static"
+# ssh -t "${NAS_SSH_TARGET}" "cd '${NAS_DEPLOY_DIR}' && sudo '${NAS_DOCKER_BIN}' compose up -d --force-recreate playlist-admin && sudo '${NAS_DOCKER_BIN}' compose -f docker-compose.playlist.yml up -d --force-recreate playlist-static"
 ```
 
-Set `DEPLOY_PASSWORD` as an environment variable before running.
+Set the `NAS_*` variables in the current shell before running.
 
 ## Port Reference
 
