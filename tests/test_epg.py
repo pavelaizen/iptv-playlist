@@ -341,6 +341,38 @@ def test_trim_xmltv_prefers_explicit_mapping_then_global_name_fallback(
     assert summary.unmatched_playlist_names == ()
 
 
+def test_source_strategy_preserves_existing_output_when_no_channels_match(
+    tmp_path: Path,
+):
+    source = tmp_path / "source.xml.gz"
+    output = tmp_path / "epg.xml"
+    previous_payload = "<tv><channel id='previous'/></tv>\n"
+    output.write_text(previous_payload, encoding="utf-8")
+    write_gzip(
+        source,
+        "<tv>"
+        "  <channel id='other'><display-name>Other</display-name></channel>"
+        "  <programme channel='other'><title>Other</title></programme>"
+        "</tv>",
+    )
+
+    summary = epg.trim_xmltv_with_source_strategies(
+        published_channels=[
+            {
+                "name": "Missing Channel",
+                "mappings": [{"source_key": "main", "channel_id": "missing-id"}],
+            }
+        ],
+        sources={"main": source},
+        default_source_order=["main"],
+        output_xmltv_path=output,
+    )
+
+    assert summary.matched_channel_count == 0
+    assert summary.programme_count == 0
+    assert output.read_text(encoding="utf-8") == previous_payload
+
+
 def test_source_strategy_batches_explicit_mapping_scans(
     tmp_path: Path,
     monkeypatch,

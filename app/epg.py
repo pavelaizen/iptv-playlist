@@ -341,9 +341,10 @@ def trim_xmltv_with_source_strategies(
         if channel_ids and source_key in sources
     ]
     if not used_source_keys:
-        output_xmltv_path.parent.mkdir(parents=True, exist_ok=True)
-        output_xmltv_path.write_text("<tv></tv>\n", encoding="utf-8")
-        _make_public_readable(output_xmltv_path)
+        if not output_xmltv_path.exists():
+            output_xmltv_path.parent.mkdir(parents=True, exist_ok=True)
+            output_xmltv_path.write_text("<tv></tv>\n", encoding="utf-8")
+            _make_public_readable(output_xmltv_path)
         return EpgTrimSummary(
             playlist_channel_count=len(playlist_names),
             source_channel_count=0,
