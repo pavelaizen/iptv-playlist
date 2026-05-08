@@ -4,9 +4,28 @@ import re
 from pathlib import Path
 
 from app.admin_models import ChannelSnapshot
-from app.main import parse_m3u
 
 ATTR_RE = re.compile(r'([A-Za-z0-9_-]+)="([^"]*)"')
+
+
+def parse_m3u(path: Path) -> list[tuple[list[str], str]]:
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    entries: list[tuple[list[str], str]] = []
+    pending_meta: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.upper().startswith("#EXTM3U"):
+            continue
+        if stripped.startswith("#"):
+            pending_meta.append(line)
+            continue
+        entries.append((pending_meta[:], line))
+        pending_meta = []
+
+    return entries
 
 
 def import_playlist_entries(path: Path) -> list[dict[str, str]]:

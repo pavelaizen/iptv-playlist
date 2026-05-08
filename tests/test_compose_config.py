@@ -9,6 +9,7 @@ def test_playlist_admin_runs_http_service_and_owns_private_state():
 
     assert "playlist-admin:" in compose
     assert "container_name: playlist-admin" in compose
+    assert "dockerfile: Dockerfile.playlist-admin" in compose
     assert "LOG_LEVEL: ${LOG_LEVEL:-INFO}" in compose
     assert "TZ: ${TZ:-Asia/Jerusalem}" in compose
     assert "./original_playlist.m3u8:/data/input/playlist.m3u:ro" in compose
@@ -39,6 +40,12 @@ def test_playlist_admin_runs_http_service_and_owns_private_state():
     assert "try_files /epg.xml =404;" in nginx_conf
     assert "listen 8766;" in nginx_conf
     assert "proxy_pass http://127.0.0.1:8780;" in nginx_conf
+    retired_playlist_worker = "playlist-" + "sanitizer"
+    retired_epg_worker = "epg-" + "trimmer"
+    assert retired_playlist_worker not in compose
+    assert retired_epg_worker not in compose
+    assert not Path("Dockerfile.playlist-" + "sanitizer").exists()
+    assert Path("Dockerfile.playlist-admin").read_text(encoding="utf-8").count("app.admin_runtime") == 1
 
 
 def test_compose_does_not_expose_ignored_probe_environment_variables():

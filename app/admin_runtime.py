@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time as datetime_time, timedelta
 from pathlib import Path
 
 from app.admin_service import AdminService, AdminServiceSettings
 from app.admin_store import AdminStore, bootstrap_from_playlist
 from app.admin_web import serve
-from app.epg_worker import parse_run_time, seconds_until_next_run_time
+
+
+LOG = logging.getLogger("playlist-admin-runtime")
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,28 @@ class RuntimeSettings:
             bind_host=os.getenv("ADMIN_BIND_HOST", "0.0.0.0"),
             bind_port=int(os.getenv("ADMIN_BIND_PORT", "8780")),
         )
+
+
+def parse_run_time(raw_value: str) -> tuple[int, int]:
+    try:
+        hour_raw, minute_raw = raw_value.strip().split(":", maxsplit=1)
+        hour = int(hour_raw)
+        minute = int(minute_raw)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    LOG.warning("Invalid EPG_RUN_TIME=%r; falling back to 04:00", raw_value)
+    return 4, 0
+
+
+def seconds_until_next_run_time(now: datetime, run_time: tuple[int, int]) -> float:
+    hour, minute = run_time
+    target = datetime.combine(now.date(), datetime_time(hour, minute), tzinfo=now.tzinfo)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
 
 
 def main() -> None:
@@ -91,7 +116,9 @@ def _scheduler_loop(service: AdminService, run_time: tuple[int, int]) -> None:
             run_time,
         )
         time.sleep(sleep_seconds)
-        service.validate_all(trigger_type="scheduled")
+        result = service.validate_all(trigger_type="scheduled")
+        if result.get("status") == "ok":
+            service.rebuild_all_public_outputs("scheduled")
 
 
 if __name__ == "__main__":

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import queue
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from html import escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from app.admin_events import AdminEventBus, format_sse_event
 from app.epg_sources import search_epgpw_channels
 
 
@@ -131,6 +133,17 @@ def _epg_preview_rows(programmes: list[dict[str, object]]) -> str:
     )
 
 
+def _format_run_time(value: str) -> str:
+    """Convert SQLite UTC timestamp to local time display."""
+    if not value:
+        return ""
+    try:
+        dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return dt.astimezone().strftime("%d/%m %H:%M")
+    except (ValueError, TypeError):
+        return value
+
+
 def _format_programme_time(value: str) -> str:
     if not value:
         return ""
@@ -241,6 +254,9 @@ def render_channel_editor_page(channel, variants, mappings, epg_sources, epg_pre
     preview_rows = _epg_preview_rows(preview_items)
     preview_table_hidden = " hidden" if not preview_items else ""
     preview_empty_hidden = " hidden" if preview_items else ""
+    logo_preview = channel.tvg_logo or epg_icon
+    logo_preview_hidden = "" if logo_preview else " hidden"
+    epg_icon_hidden = "" if epg_icon else " hidden"
     return _page(
         channel.name,
         f"""
@@ -249,8 +265,10 @@ def render_channel_editor_page(channel, variants, mappings, epg_sources, epg_pre
             <h2>Channel</h2>
             <label>Name<input name="name" value="{escape(channel.name)}"></label>
             <label>Group<input name="group_name" value="{escape(channel.group_name)}"></label>
-            <label>Logo<input name="tvg_logo" value="{escape(channel.tvg_logo)}"></label>
-            {f'<label>EPG Icon <img class="ch-icon" src="{escape(epg_icon)}" alt="" style="vertical-align:middle;max-width:80px"> <code style="font-size:11px">{escape(epg_icon)}</code></label>' if epg_icon else ''}
+            <label>Logo
+              <span class="logo-field"><input name="tvg_logo" value="{escape(channel.tvg_logo)}"><img id="channel-logo-preview" class="ch-icon" src="{escape(logo_preview)}" alt=""{logo_preview_hidden}></span>
+            </label>
+            <label id="epg-icon-row"{epg_icon_hidden}>EPG Icon <img id="epg-icon-preview" class="ch-icon" src="{escape(epg_icon)}" alt="" style="vertical-align:middle;max-width:80px"> <code id="epg-icon-url" style="font-size:11px">{escape(epg_icon)}</code></label>
             <label>TVG ID<input name="tvg_id" value="{escape(channel.tvg_id)}"></label>
             <label><input type="checkbox" name="enabled" {"checked" if channel.enabled else ""}> Enabled</label>
             <button type="submit">Save channel</button>
@@ -342,7 +360,7 @@ def render_runs_page(runs) -> str:
         (
             f"<tr><td>{run['id']}</td><td>{escape(str(run['trigger_type']))}</td>"
             f"<td>{escape(str(run['status']))}</td><td>{int(run['valid_count'])}</td>"
-            f"<td>{int(run['invalid_count'])}</td><td>{escape(str(run['finished_at']))}</td></tr>"
+            f"<td>{int(run['invalid_count'])}</td><td>{escape(_format_run_time(str(run['finished_at'])))}</td></tr>"
         )
         for run in runs
     )
@@ -397,6 +415,8 @@ code {{ font-family:Fira Code, ui-monospace, monospace; font-size:12px; overflow
 .drag-handle {{ display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border:1px solid var(--line); border-radius:6px; background:#f8fafc; color:var(--muted); font-weight:800; cursor:grab; user-select:none; }}
 tr.dragging td {{ opacity:.55; background:#e0f2fe; }}
 .ch-icon {{ width:32px; height:32px; object-fit:contain; border-radius:4px; background:#f3f4f6; }}
+.logo-field {{ display:flex; align-items:center; gap:8px; }}
+.logo-field input {{ flex:1 1 auto; min-width:0; }}
 .muted {{ color:var(--muted); font-size:13px; }}
 .channel-create-form .inline-grid {{ margin-bottom:0; }}
 #job-panel:empty {{ display:none; }}
@@ -498,6 +518,21 @@ function updateEpgPreview(preview) {{
   empty.hidden = programmes.length > 0;
   empty.textContent = preview?.empty_message || '';
 }}
+function updateChannelLogoPreview(icon) {{
+  const img = document.getElementById('channel-logo-preview');
+  if (!img) return;
+  img.src = icon || '';
+  img.hidden = !icon;
+}}
+function updateEpgIconPreview(icon) {{
+  const row = document.getElementById('epg-icon-row');
+  const img = document.getElementById('epg-icon-preview');
+  const text = document.getElementById('epg-icon-url');
+  if (!row || !img || !text) return;
+  row.hidden = !icon;
+  img.src = icon || '';
+  text.textContent = icon || '';
+}}
 async function refreshEpgSources() {{
   const body = document.getElementById('epg-sources-body');
   if (!body) return;
@@ -507,11 +542,30 @@ async function refreshEpgSources() {{
 async function refreshChannelEditor(channelId) {{
   const mappingBody = document.getElementById('epg-mappings-body');
   const streamBody = document.getElementById('stream-variants-body');
+  const logoInput = document.querySelector('input[name="tvg_logo"]');
   if (!mappingBody && !streamBody) return;
   const payload = await api('/api/channels/' + channelId);
+  const channel = payload.channel || {{}};
+  if (logoInput && document.activeElement !== logoInput) logoInput.value = channel.logo || '';
+  updateChannelLogoPreview(channel.logo || channel.epg_icon || '');
+  updateEpgIconPreview(channel.epg_icon || '');
   if (mappingBody) mappingBody.innerHTML = mappingRowsHtml(channelId, payload.channel?.mappings || []);
   if (streamBody) streamBody.innerHTML = streamRowsHtml(payload.channel?.streams || []);
+  if (document.getElementById('epg-preview-body')) {{
+    const preview = await api('/api/channels/' + channelId + '/epg-preview');
+    updateEpgPreview(preview);
+  }}
 }}
+function connectAdminEvents() {{
+  if (!window.EventSource) return;
+  const events = new EventSource('/api/events');
+  events.addEventListener('channels-changed', async () => {{
+    const channelForm = document.getElementById('channel-form');
+    if (channelForm?.dataset.channelId) await refreshChannelEditor(channelForm.dataset.channelId);
+    if (document.querySelector('#channels-table tbody')) await refreshChannelsPage();
+  }});
+}}
+connectAdminEvents();
 async function watchInitialStabilityJob(channelId) {{
   const params = new URLSearchParams(window.location.search);
   const jobId = params.get('stability_job');
@@ -845,6 +899,9 @@ def _dispatch_request(store, service, method: str, raw_path: str, body: object |
 
 
 def _dispatch_request_checked(store, service, method: str, path: str, query: dict[str, list[str]], payload: dict[str, object]):
+    if method == "GET" and path == "/api/events":
+        return _text_response(": connected\n\n", content_type="text/event-stream")
+
     if method == "GET" and path == "/api/channels":
         all_icons = service.get_all_epg_icons()
         channels = [_channel_payload(channel, epg_icon=all_icons.get(channel.id, "")) for channel in store.list_channels()]
@@ -853,6 +910,7 @@ def _dispatch_request_checked(store, service, method: str, path: str, query: dic
     if method == "POST" and path == "/api/channels":
         channel = store.add_channel(payload)
         variants = store.list_stream_variants(channel.id)
+        service.publish_channels_changed("channel-create", channel_id=channel.id)
         job = service.start_rebuild_playlist_job("channel-create")
         stability_job = service.start_stream_stability_job(variants[0].id) if variants else None
         return _json_response(
@@ -867,6 +925,7 @@ def _dispatch_request_checked(store, service, method: str, path: str, query: dic
     if method == "POST" and path == "/api/channels/reorder":
         channel_ids = [int(value) for value in payload.get("channel_ids", [])]
         store.reorder_channels(channel_ids)
+        service.publish_channels_changed("channel-reorder")
         return _json_response(service.start_rebuild_playlist_job("channel-reorder"), status=202)
 
     channel_prefix = "/api/channels/"
@@ -902,23 +961,29 @@ def _dispatch_request_checked(store, service, method: str, path: str, query: dic
                         "tvg_rec": payload.get("tvg_rec", current.tvg_rec),
                     },
                 )
+                service.publish_channels_changed("channel-update", channel_id=channel_id)
                 return _json_response(service.start_rebuild_playlist_job("channel-update"), status=202)
             if method == "DELETE":
                 store.delete_channel(channel_id)
+                service.publish_channels_changed("channel-delete", channel_id=channel_id)
                 return _json_response(service._start_job("channel-delete-rebuild", lambda: service.rebuild_all_public_outputs("channel-delete")), status=202)
         if len(parts) == 2 and parts[1] == "epg-preview" and method == "GET":
             return _json_response(service.preview_channel_epg_programmes(channel_id))
         if len(parts) == 2 and parts[1] == "streams" and method == "POST":
             variant = store.add_stream_variant(channel_id, payload)
+            service.publish_channels_changed("stream-create", channel_id=channel_id, stream_id=variant.id)
             job = service.start_rebuild_playlist_job("stream-create")
             return _json_response({"stream": _stream_payload(variant), "job": job}, status=201)
         if len(parts) == 3 and parts[1] == "streams":
             stream_id = int(parts[2])
             if method == "PATCH":
                 variant = store.update_stream_variant(stream_id, payload)
+                service.publish_channels_changed("stream-update", channel_id=variant.channel_id, stream_id=stream_id)
                 return _json_response({"stream": _stream_payload(variant), "job": service.start_rebuild_playlist_job("stream-update")}, status=202)
             if method == "DELETE":
+                variant = store.get_stream_variant(stream_id)
                 store.delete_stream_variant(stream_id)
+                service.publish_channels_changed("stream-delete", channel_id=variant.channel_id, stream_id=stream_id)
                 return _json_response(service.start_rebuild_playlist_job("stream-delete"), status=202)
         if len(parts) == 2 and parts[1] == "mappings" and method == "POST":
             epg_source_id = int(payload["epg_source_id"])
@@ -929,19 +994,20 @@ def _dispatch_request_checked(store, service, method: str, path: str, query: dic
                 int(payload.get("priority", 0)),
                 channel_xmltv_id,
             )
-            icon_url = service._extract_epg_source_icon(epg_source_id, channel_xmltv_id)
-            if icon_url:
-                store.set_channel_logo_url(channel_id, icon_url)
+            icon_url = service.apply_epg_logo_for_mapping(channel_id, epg_source_id, channel_xmltv_id)
+            service.publish_channels_changed("mapping-create", channel_id=channel_id, source_id=epg_source_id)
             job = service._start_job("mapping-create-rebuild", lambda: service.rebuild_all_public_outputs("mapping-create"))
             return _json_response({"mapping": _mapping_payload(mapping), "job": job, "icon_url": icon_url}, status=201)
         if len(parts) == 3 and parts[1] == "mappings":
             mapping_id = int(parts[2])
             if method == "PATCH":
                 mapping = store.update_channel_epg_mapping(channel_id, mapping_id, payload)
+                service.publish_channels_changed("mapping-update", channel_id=channel_id)
                 job = service._start_job("mapping-update-rebuild", lambda: service.rebuild_all_public_outputs("mapping-update"))
                 return _json_response({"mapping": _mapping_payload(mapping), "job": job}, status=202)
             if method == "DELETE":
                 store.delete_channel_epg_mapping(channel_id, mapping_id)
+                service.publish_channels_changed("mapping-delete", channel_id=channel_id)
                 return _json_response(service._start_job("mapping-delete-rebuild", lambda: service.rebuild_all_public_outputs("mapping-delete")), status=202)
         if len(parts) == 2 and parts[1] == "epgpw-map" and method == "POST":
             result = service.auto_add_epgpw_mapping(
@@ -1062,6 +1128,7 @@ def build_test_server(store, service):
 class AdminRequestHandler(BaseHTTPRequestHandler):
     store = None
     service = None
+    event_bus: AdminEventBus | None = None
 
     def do_GET(self) -> None:  # noqa: N802
         self._dispatch("GET")
@@ -1076,6 +1143,9 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self._dispatch("DELETE")
 
     def _dispatch(self, method: str) -> None:
+        if method == "GET" and urlparse(self.path).path == "/api/events":
+            self._stream_events()
+            return
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length).decode("utf-8") if content_length else None
         status, headers, payload = _dispatch_request(
@@ -1095,9 +1165,36 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def _stream_events(self) -> None:
+        event_bus = self.event_bus or getattr(self.service, "event_bus", None)
+        if event_bus is None:
+            self._write_text(": connected\n\n", content_type="text/event-stream", status=200)
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        try:
+            self.wfile.write(b": connected\n\n")
+            self.wfile.flush()
+            with event_bus.subscribe() as events:
+                while True:
+                    try:
+                        event = events.get(timeout=15)
+                    except queue.Empty:
+                        self.wfile.write(b": keepalive\n\n")
+                    else:
+                        self.wfile.write(format_sse_event(event).encode("utf-8"))
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
 
-def serve(*, bind_host: str, bind_port: int, store, service) -> None:
+
+def serve(*, bind_host: str, bind_port: int, store, service, event_bus: AdminEventBus | None = None) -> None:
     AdminRequestHandler.store = store
     AdminRequestHandler.service = service
+    AdminRequestHandler.event_bus = event_bus or getattr(service, "event_bus", None)
     httpd = ThreadingHTTPServer((bind_host, bind_port), AdminRequestHandler)
     httpd.serve_forever()

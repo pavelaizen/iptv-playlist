@@ -9,4 +9,4 @@ WORKDIR /app
 COPY app /app/app
 COPY healthcheck.py /app/healthcheck.py
 
-CMD ["python", "-m", "app.main"]
+CMD ["python", "-m", "app.admin_runtime"]

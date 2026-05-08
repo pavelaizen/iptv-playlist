@@ -478,6 +478,158 @@ def test_delete_epg_source_invalidates_channels_without_remaining_valid_mapping(
     assert store.get_channel(channel_id).status == "invalid"
 
 
+def test_apply_epg_logo_for_mapping_sets_blank_channel_logo_from_cached_source(
+    tmp_path: Path,
+) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    channel_id = seed_channel(store)
+    source = store.add_epg_source({"display_name": "Main", "source_url": "https://example.com/epg.xml"})
+    store.add_channel_epg_mapping(channel_id, source.id, 0, "chan-1")
+    epg_work_dir = tmp_path / "epg"
+    epg_work_dir.mkdir()
+    (epg_work_dir / f"source-{source.id}.xmltv").write_text(
+        '<tv><channel id="chan-1"><display-name>Channel One</display-name>'
+        '<icon src="https://img.example/one.png"/></channel></tv>',
+        encoding="utf-8",
+    )
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+            epg_work_dir=epg_work_dir,
+        ),
+    )
+
+    result = service.apply_epg_logo_for_mapping(channel_id, source.id, "chan-1")
+
+    assert result == "https://img.example/one.png"
+    assert store.get_channel(channel_id).tvg_logo == "https://img.example/one.png"
+
+
+def test_reload_epg_source_applies_missing_logos_for_existing_mappings(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    channel_id = seed_channel(store)
+    source = store.add_epg_source({"display_name": "Main", "source_url": "https://example.com/epg.xml"})
+    store.add_channel_epg_mapping(channel_id, source.id, 0, "chan-1")
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+            epg_work_dir=tmp_path / "epg",
+        ),
+    )
+
+    def fake_download_epg_source(source_url: str, destination: Path, **kwargs) -> None:
+        del source_url, kwargs
+        destination.write_text(
+            '<tv><channel id="chan-1"><display-name>Channel One</display-name>'
+            '<icon src="https://img.example/reloaded.png"/></channel></tv>',
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr("app.admin_service.download_epg_source", fake_download_epg_source)
+
+    result = service.reload_epg_source(source.id)
+
+    assert result["status"] == "ok"
+    assert result["applied_logo_count"] == 1
+    assert store.get_channel(channel_id).tvg_logo == "https://img.example/reloaded.png"
+
+
+def test_reload_epg_source_does_not_overwrite_manual_channel_logo(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    channel_id = seed_channel(store)
+    store.update_channel(
+        channel_id,
+        {
+            "name": "Channel One",
+            "group_name": "News",
+            "stream_url": "http://provider.invalid/one",
+            "tvg_id": "chan-1",
+            "tvg_name": "Channel One",
+            "tvg_logo": "https://manual.example/logo.png",
+            "tvg_rec": "3",
+            "enabled": True,
+        },
+    )
+    source = store.add_epg_source({"display_name": "Main", "source_url": "https://example.com/epg.xml"})
+    store.add_channel_epg_mapping(channel_id, source.id, 0, "chan-1")
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+            epg_work_dir=tmp_path / "epg",
+        ),
+    )
+
+    def fake_download_epg_source(source_url: str, destination: Path, **kwargs) -> None:
+        del source_url, kwargs
+        destination.write_text(
+            '<tv><channel id="chan-1"><display-name>Channel One</display-name>'
+            '<icon src="https://img.example/source.png"/></channel></tv>',
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr("app.admin_service.download_epg_source", fake_download_epg_source)
+
+    result = service.reload_epg_source(source.id)
+
+    assert result["status"] == "ok"
+    assert result["applied_logo_count"] == 0
+    assert store.get_channel(channel_id).tvg_logo == "https://manual.example/logo.png"
+
+
+def test_auto_add_epgpw_mapping_gets_logo_after_source_reload(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    channel_id = seed_channel(store)
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+            epg_work_dir=tmp_path / "epg",
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "start_reload_epg_source_job",
+        lambda source_id: {"job_id": f"reload-{source_id}", "status": "queued"},
+    )
+
+    def fake_download_epg_source(source_url: str, destination: Path, **kwargs) -> None:
+        del source_url, kwargs
+        destination.write_text(
+            '<tv><channel id="12345"><display-name>Channel One</display-name>'
+            '<icon src="https://img.example/epgpw.png"/></channel></tv>',
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr("app.admin_service.download_epg_source", fake_download_epg_source)
+
+    mapping_result = service.auto_add_epgpw_mapping(channel_id, "12345", "Channel One")
+    reload_result = service.reload_epg_source(int(mapping_result["source_id"]))
+
+    assert reload_result["status"] == "ok"
+    assert reload_result["applied_logo_count"] == 1
+    assert store.get_channel(channel_id).tvg_logo == "https://img.example/epgpw.png"
+
+
 def test_xmltv_channel_cache_ignores_programmes_without_retaining_them(tmp_path: Path) -> None:
     source = tmp_path / "source.xml.gz"
     with gzip.open(source, "wt", encoding="utf-8") as fh:

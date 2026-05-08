@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.admin_epg import sync_epg, sync_epg_from_cache, collect_channel_epg_icons
+from app.admin_events import AdminEventBus
 from app.admin_m3u import render_playlist
 from app.admin_models import ChannelDraft, ChannelSnapshot, ChannelStreamVariant
 from app.admin_store import AdminStore
@@ -42,13 +43,24 @@ class AdminJob:
 
 
 class AdminService:
-    def __init__(self, store: AdminStore, settings: AdminServiceSettings) -> None:
+    def __init__(
+        self,
+        store: AdminStore,
+        settings: AdminServiceSettings,
+        event_bus: AdminEventBus | None = None,
+    ) -> None:
         self.store = store
         self.settings = settings
+        self.event_bus = event_bus or AdminEventBus()
         self._job_lock = threading.Lock()
         self._publish_lock = threading.Lock()
         self._jobs_lock = threading.Lock()
         self._jobs: dict[str, AdminJob] = {}
+
+    def publish_channels_changed(self, reason: str, **payload: object) -> None:
+        event_payload: dict[str, object] = {"reason": reason}
+        event_payload.update(payload)
+        self.event_bus.publish("channels-changed", event_payload)
 
     def validate_channel(self, channel_id: int) -> dict[str, object]:
         drafts = {draft.id: draft for draft in self.store.list_channels()}
@@ -73,9 +85,11 @@ class AdminService:
                 valid_variants.append(variant)
         if not valid_variants:
             self.store.mark_channel_invalid(channel_id, draft.draft_version, "ffprobe failed")
+            self.publish_channels_changed("validate-channel", channel_id=channel_id)
             return {"status": "invalid", "channel_id": channel_id}
 
         self.store.replace_live_snapshot(channel_id, draft, valid_variants)
+        self.publish_channels_changed("validate-channel", channel_id=channel_id)
         return {"status": "valid", "channel_id": channel_id, "publish": {"status": "not_run"}}
 
     def validate_all(self, trigger_type: str) -> dict[str, object]:
@@ -129,6 +143,7 @@ class AdminService:
                 epg_programmes=0,
                 error_summary="",
             )
+            self.publish_channels_changed("validate-all", trigger_type=trigger_type)
             return {
                 "status": "ok",
                 "trigger_type": trigger_type,
@@ -188,6 +203,11 @@ class AdminService:
             self.store.mark_channels_invalid(
                 invalidated_channel_ids,
                 "EPG source deleted; no remaining valid enabled EPG mapping",
+            )
+            self.publish_channels_changed(
+                "epg-source-delete",
+                source_id=source_id,
+                channel_ids=affected_channel_ids,
             )
             snapshots = self._capture_publish_snapshots()
             publish_result = self._publish_candidate_playlist(render_playlist(snapshots))
@@ -305,26 +325,50 @@ class AdminService:
         ]
         return collect_channel_epg_icons(channels_data, self._epg_work_dir()).get(channel_id, "")
 
-    def _extract_epg_source_icon(self, source_id: int, channel_xmltv_id: str) -> str:
-        source_path = self._epg_work_dir() / f"source-{source_id}.xmltv"
-        if not source_path.is_file():
+    def apply_epg_logo_for_mapping(
+        self,
+        channel_id: int,
+        source_id: int,
+        channel_xmltv_id: str,
+    ) -> str:
+        icon = self._extract_epg_source_icon(source_id, channel_xmltv_id)
+        if not icon:
             return ""
-        opener = gzip.open if _looks_gzip(source_path) else open
-        with opener(source_path, "rb") as fh:
-            for _, element in ET.iterparse(fh, events=("end",)):
-                if element.tag == "channel":
-                    if element.attrib.get("id", "") == channel_xmltv_id:
-                        for child in element:
-                            if child.tag == "icon" and child.attrib.get("src"):
-                                icon = child.attrib["src"].strip()
-                                element.clear()
-                                return icon
-                        element.clear()
-                        return ""
-                    element.clear()
-                elif element.tag == "programme":
-                    element.clear()
+        if self.store.set_channel_logo_url(channel_id, icon):
+            self.publish_channels_changed("epg-logo", channel_id=channel_id, source_id=source_id)
+            return icon
         return ""
+
+    def apply_missing_epg_logos_for_source(self, source_id: int) -> dict[int, str]:
+        icons_by_xmltv_id = self._collect_epg_source_icons(source_id)
+        if not icons_by_xmltv_id:
+            return {}
+
+        applied: dict[int, str] = {}
+        for mapping in self.store.list_channel_epg_mappings_for_source(source_id):
+            channel_id = int(mapping["channel_id"])
+            xmltv_id = str(mapping["channel_xmltv_id"])
+            icon = icons_by_xmltv_id.get(xmltv_id, "")
+            if icon and self.store.set_channel_logo_url(channel_id, icon):
+                applied[channel_id] = icon
+
+        if applied:
+            self.publish_channels_changed(
+                "epg-logo",
+                source_id=source_id,
+                channel_ids=sorted(applied),
+            )
+        return applied
+
+    def _extract_epg_source_icon(self, source_id: int, channel_xmltv_id: str) -> str:
+        return self._collect_epg_source_icons(source_id).get(channel_xmltv_id, "")
+
+    def _collect_epg_source_icons(self, source_id: int) -> dict[str, str]:
+        source = self.store.get_epg_source(source_id)
+        source_path = _cached_epg_preview_source_path(source_id, source.source_url, self._epg_work_dir())
+        if source_path is None or not source_path.is_file():
+            return {}
+        return dict(_iter_xmltv_channel_icons(source_path))
 
     def get_all_epg_icons(self) -> dict[int, str]:
         drafts = self.store.list_channels()
@@ -548,6 +592,7 @@ class AdminService:
                 with self._jobs_lock:
                     job.status = "ok"
                     job.result = result
+                self.publish_channels_changed(kind)
 
         threading.Thread(target=run, daemon=True, name=f"playlist-admin-{kind}").start()
         return {"job_id": job.id, "status": job.status}
@@ -566,6 +611,7 @@ class AdminService:
         if result:
             draft = self.store.get_channel(variant.channel_id)
             self.store.replace_live_snapshot(variant.channel_id, draft, [variant])
+        self.publish_channels_changed("validate-stream", channel_id=variant.channel_id, stream_id=stream_id)
         return {"status": "valid" if result else "invalid", "stream_id": stream_id}
 
     def validate_stream_stability(self, stream_id: int) -> dict[str, object]:
@@ -581,6 +627,11 @@ class AdminService:
             error_text=result.issues,
             speed=result.speed,
             frames=result.frames,
+        )
+        self.publish_channels_changed(
+            "validate-stream-extended",
+            channel_id=variant.channel_id,
+            stream_id=stream_id,
         )
         return {
             "status": result.status,
@@ -600,10 +651,17 @@ class AdminService:
                 source_id,
                 _iter_xmltv_channel_cache(source_path),
             )
+            applied_logos = self.apply_missing_epg_logos_for_source(source_id)
         except Exception as exc:  # noqa: BLE001 - failed reload keeps prior cache
             self.store.mark_epg_source_error(source_id, str(exc))
             return {"status": "error", "source_id": source_id, "error": str(exc)[:300]}
-        return {"status": "ok", "source_id": source_id, "channel_count": channel_count}
+        self.publish_channels_changed("epg-source-reload", source_id=source_id)
+        return {
+            "status": "ok",
+            "source_id": source_id,
+            "channel_count": channel_count,
+            "applied_logo_count": len(applied_logos),
+        }
 
     def auto_add_epgpw_mapping(
         self,
@@ -615,19 +673,13 @@ class AdminService:
         source_name = f"epg.pw: {display_name}" if display_name else f"epg.pw channel {epgpw_channel_id}"
         source = self.store.ensure_epg_source(source_url, source_name)
 
-        def _extract_and_set_icon() -> str:
-            icon = self._extract_epg_source_icon(source.id, epgpw_channel_id)
-            if icon:
-                self.store.set_channel_logo_url(channel_id, icon)
-            return icon
-
         existing_mappings = self.store.list_channel_epg_mappings(channel_id)
         for m in existing_mappings:
             if (
                 int(m["epg_source_id"]) == source.id
                 and str(m["channel_xmltv_id"]) == epgpw_channel_id
             ):
-                icon_url = _extract_and_set_icon()
+                icon_url = self.apply_epg_logo_for_mapping(channel_id, source.id, epgpw_channel_id)
                 return {
                     "status": "duplicate",
                     "source_id": source.id,
@@ -645,7 +697,8 @@ class AdminService:
         )
 
         self.start_reload_epg_source_job(source.id)
-        icon_url = _extract_and_set_icon()
+        icon_url = self.apply_epg_logo_for_mapping(channel_id, source.id, epgpw_channel_id)
+        self.publish_channels_changed("epgpw-map", channel_id=channel_id, source_id=source.id)
 
         rebuild_job = self._start_job(
             "epgpw-map-rebuild",
@@ -714,6 +767,37 @@ def _iter_xmltv_channel_cache(path: Path):
                 root.clear()
     if not saw_channels:
         raise ValueError("EPG source has no channel nodes")
+
+
+def _iter_xmltv_channel_icons(path: Path):
+    opener = gzip.open if _looks_gzip(path) else open
+    with opener(path, "rb") as fh:
+        root = None
+        for event, element in ET.iterparse(fh, events=("start", "end")):
+            if event == "start" and root is None:
+                root = element
+                continue
+            if event != "end":
+                continue
+            if element.tag == "programme":
+                element.clear()
+                if root is not None and root is not element:
+                    root.clear()
+                continue
+            if element.tag != "channel":
+                continue
+
+            channel_id = element.attrib.get("id", "").strip()
+            icon = ""
+            for child in element:
+                if child.tag == "icon" and child.attrib.get("src"):
+                    icon = child.attrib["src"].strip()
+                    break
+            if channel_id and icon:
+                yield channel_id, icon
+            element.clear()
+            if root is not None and root is not element:
+                root.clear()
 
 
 def _looks_gzip(path: Path) -> bool:

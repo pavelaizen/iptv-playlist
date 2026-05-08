@@ -579,9 +579,9 @@ class AdminStore:
             source_id = int(cursor.lastrowid)
         return self.get_epg_source(source_id)
 
-    def set_channel_logo_url(self, channel_id: int, logo_url: str) -> None:
+    def set_channel_logo_url(self, channel_id: int, logo_url: str) -> bool:
         with self._connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE channels
                 SET tvg_logo = ?, updated_at = CURRENT_TIMESTAMP
@@ -589,6 +589,7 @@ class AdminStore:
                 """,
                 (logo_url, channel_id),
             )
+            return cursor.rowcount > 0
 
     def update_epg_source(self, source_id: int, payload: dict[str, object]) -> EpgSource:
         current = self.get_epg_source(source_id)
@@ -1175,6 +1176,27 @@ class AdminStore:
                 ORDER BY priority, id
                 """,
                 (channel_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_channel_epg_mappings_for_source(self, source_id: int) -> list[dict[str, object]]:
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT
+                    mapping.id,
+                    mapping.channel_id,
+                    mapping.epg_source_id,
+                    mapping.priority,
+                    mapping.channel_xmltv_id,
+                    mapping.enabled
+                FROM channel_epg_mappings mapping
+                WHERE mapping.epg_source_id = ?
+                  AND mapping.enabled = 1
+                ORDER BY mapping.channel_id, mapping.priority, mapping.id
+                """,
+                (source_id,),
             ).fetchall()
         return [dict(row) for row in rows]
 

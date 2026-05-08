@@ -76,24 +76,13 @@ def sync_epg(
         if bool(source.get("enabled", True)) and f"source-{int(source['id'])}" in source_paths
     ]
 
-    summary = trim_xmltv_with_source_strategies(
+    return _trim_and_publish_epg_candidate(
         published_channels=published_channels,
-        sources=source_paths,
+        source_paths=source_paths,
         default_source_order=default_source_order,
-        output_xmltv_path=output_path,
-    )
-
-    _inject_channel_icons(output_path, published_channels)
-
-    icons = collect_channel_epg_icons(published_channels, work_dir)
-    if icons:
-        _save_epg_icon_cache(icons, work_dir)
-    return EpgSyncResult(
-        changed=True,
-        matched_channels=summary.matched_channel_count,
-        programmes=summary.programme_count,
+        output_path=output_path,
+        work_dir=work_dir,
         failed_sources=failed_sources,
-        channel_icons=icons,
     )
 
 
@@ -137,25 +126,72 @@ def sync_epg_from_cache(
         if bool(source.get("enabled", True)) and f"source-{int(source['id'])}" in source_paths
     ]
 
-    summary = trim_xmltv_with_source_strategies(
+    return _trim_and_publish_epg_candidate(
         published_channels=published_channels,
-        sources=source_paths,
+        source_paths=source_paths,
         default_source_order=default_source_order,
-        output_xmltv_path=output_path,
-    )
-
-    _inject_channel_icons(output_path, published_channels)
-
-    icons = collect_channel_epg_icons(published_channels, work_dir)
-    if icons:
-        _save_epg_icon_cache(icons, work_dir)
-    return EpgSyncResult(
-        changed=True,
-        matched_channels=summary.matched_channel_count,
-        programmes=summary.programme_count,
+        output_path=output_path,
+        work_dir=work_dir,
         failed_sources=skipped_sources,
-        channel_icons=icons,
     )
+
+
+def _trim_and_publish_epg_candidate(
+    *,
+    published_channels: list[dict[str, object]],
+    source_paths: dict[str, Path],
+    default_source_order: list[str],
+    output_path: Path,
+    work_dir: Path,
+    failed_sources: list[str],
+) -> EpgSyncResult:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{output_path.name}.",
+        suffix=".candidate",
+        dir=output_path.parent,
+    )
+    os.close(fd)
+    candidate_path = Path(temp_name)
+    try:
+        summary = trim_xmltv_with_source_strategies(
+            published_channels=published_channels,
+            sources=source_paths,
+            default_source_order=default_source_order,
+            output_xmltv_path=candidate_path,
+        )
+        if summary.matched_channel_count <= 0 or summary.programme_count <= 0:
+            return EpgSyncResult(
+                changed=False,
+                matched_channels=summary.matched_channel_count,
+                programmes=summary.programme_count,
+                failed_sources=failed_sources,
+                channel_icons={},
+            )
+
+        _inject_channel_icons(candidate_path, published_channels)
+        icons = collect_channel_epg_icons(published_channels, work_dir)
+        if icons:
+            _save_epg_icon_cache(icons, work_dir)
+        changed = _replace_output_if_changed(candidate_path, output_path)
+        return EpgSyncResult(
+            changed=changed,
+            matched_channels=summary.matched_channel_count,
+            programmes=summary.programme_count,
+            failed_sources=failed_sources,
+            channel_icons=icons,
+        )
+    finally:
+        candidate_path.unlink(missing_ok=True)
+
+
+def _replace_output_if_changed(candidate_path: Path, output_path: Path) -> bool:
+    if output_path.exists() and candidate_path.read_bytes() == output_path.read_bytes():
+        return False
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(candidate_path, output_path)
+    os.chmod(str(output_path), 0o644)
+    return True
 
 
 def _inject_channel_icons(output_path: Path, published_channels: list[dict[str, object]]) -> None:

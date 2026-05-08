@@ -331,6 +331,132 @@ def test_channel_editor_mapping_form_refreshes_without_page_reload(tmp_path: Pat
     assert payload["job"]["job_id"]
 
 
+def test_get_channel_detail_returns_persisted_logo_and_epg_icon(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    store.import_channels(
+        [
+            {
+                "name": "Channel One",
+                "group_name": "News",
+                "stream_url": "http://provider.invalid/one",
+                "tvg_id": "chan-1",
+                "tvg_name": "Channel One",
+                "tvg_logo": "",
+                "tvg_rec": "",
+            }
+        ]
+    )
+    source = store.add_epg_source({"display_name": "Main", "source_url": "https://example.com/epg.xml"})
+    channel_id = store.list_channels()[0].id
+    epg_work_dir = tmp_path / "epg"
+    epg_work_dir.mkdir()
+    (epg_work_dir / f"source-{source.id}.xmltv").write_text(
+        '<tv><channel id="chan-1"><display-name>Channel One</display-name>'
+        '<icon src="https://img.example/one.png"/></channel></tv>',
+        encoding="utf-8",
+    )
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+            epg_work_dir=epg_work_dir,
+        ),
+    )
+    app = build_test_server(store, service)
+
+    status, _, response = app(
+        "POST",
+        f"/api/channels/{channel_id}/mappings",
+        {"epg_source_id": source.id, "epg_channel_id": "chan-1"},
+    )
+    assert status == 201
+
+    status, _, body = app("GET", f"/api/channels/{channel_id}", None)
+
+    assert status == 200
+    payload = json.loads(body)
+    assert payload["channel"]["logo"] == "https://img.example/one.png"
+    assert payload["channel"]["epg_icon"] == "https://img.example/one.png"
+
+
+def test_channel_editor_wires_sse_and_refreshes_logo_preview(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    store.import_channels(
+        [
+            {
+                "name": "Channel One",
+                "group_name": "News",
+                "stream_url": "http://provider.invalid/one",
+                "tvg_id": "chan-1",
+                "tvg_name": "Channel One",
+                "tvg_logo": "",
+                "tvg_rec": "",
+            }
+        ]
+    )
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+        ),
+    )
+    app = build_test_server(store, service)
+
+    status, _, body = app("GET", f"/ui/channels/{store.list_channels()[0].id}", None)
+
+    assert status == 200
+    assert "new EventSource('/api/events')" in body
+    assert "addEventListener('channels-changed'" in body
+    assert "updateChannelLogoPreview" in body
+    assert "updateEpgIconPreview" in body
+    assert "logoInput.value = channel.logo || ''" in body
+    assert "refreshChannelEditor" in body
+    assert "updateEpgPreview" in body
+
+
+def test_channels_dashboard_wires_sse_refresh(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+        ),
+    )
+    app = build_test_server(store, service)
+
+    status, _, body = app("GET", "/ui/channels", None)
+
+    assert status == 200
+    assert "new EventSource('/api/events')" in body
+    assert "refreshChannelsPage" in body
+    assert "addEventListener('channels-changed'" in body
+
+
+def test_events_endpoint_exposes_sse_content_type(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+        ),
+    )
+    app = build_test_server(store, service)
+
+    status, headers, body = app("GET", "/api/events", None)
+
+    assert status == 200
+    assert headers["Content-Type"] == "text/event-stream"
+    assert body.startswith(": connected")
+
+
 def test_channel_editor_exposes_extended_stream_test(tmp_path: Path) -> None:
     store = AdminStore(tmp_path / "playlist.db")
     store.initialize()

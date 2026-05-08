@@ -4,7 +4,7 @@
 
 Two containers, both using `network_mode: host`:
 
-- **`playlist-admin`** — Python app on port `8780`. Manages channels, validation, EPG sync, and publishing. Built from `Dockerfile.playlist-sanitizer`.
+- **`playlist-admin`** — Python app on port `8780`. Manages channels, validation, EPG sync, and publishing. Built from `Dockerfile.playlist-admin`.
 - **`playlist-static`** — Nginx on port `8766`. Serves static files from `published/` and reverse-proxies `/ui/` and `/api/` to the admin container at `127.0.0.1:8780`.
 
 Both containers share the host network directly. This avoids Synology's Docker bridge firewall which blocks inter-container traffic even on the same Docker network.
@@ -87,10 +87,16 @@ Synology's Docker bridge network has a firewall that **blocks container-to-conta
 - `nc -z <container_ip> <port>`: connection refused
 - nginx proxy to `playlist-admin:8780`: 504 Gateway Timeout
 
-Using `network_mode: host` on both containers eliminates this problem. Both services bind directly to host ports:
+Using `network_mode: host` on both containers eliminates this problem. The public
+edge binds on the LAN port and proxies to the admin runtime on loopback:
 
-- `playlist-admin` binds to `0.0.0.0:8780`
+- `playlist-admin` binds to `127.0.0.1:8780`
 - `playlist-static` (nginx) binds to `8766`
+
+Retired pre-admin worker containers are no longer part of the current compose
+runtime. If they still exist from an older deployment, treat them as orphans and
+stop/remove them after confirming `playlist-admin` and `playlist-static` are
+healthy.
 
 ### DNS inside containers
 

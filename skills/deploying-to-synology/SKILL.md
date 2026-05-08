@@ -53,20 +53,20 @@ ssh <user@host> 'cd /absolute/remote/repo && ./publish_emby_playlist.sh'
 ssh <user@host> 'cd /absolute/remote/repo && printf "%s\n" "<sudo-password-if-needed>" | sudo -S -p "" /var/packages/ContainerManager/target/usr/bin/docker compose -f docker-compose.playlist.yml up -d playlist-static'
 ```
 
-6. Refresh the sanitizer container without forcing a remote rebuild unless the image actually changed:
+6. Refresh the admin container without forcing a remote rebuild unless the image actually changed:
 
 ```bash
-ssh <user@host> 'cd /absolute/remote/repo && printf "%s\n" "<sudo-password-if-needed>" | sudo -S -p "" /var/packages/ContainerManager/target/usr/bin/docker compose up -d --no-build --force-recreate playlist-sanitizer'
+ssh <user@host> 'cd /absolute/remote/repo && printf "%s\n" "<sudo-password-if-needed>" | sudo -S -p "" /var/packages/ContainerManager/target/usr/bin/docker compose up -d --no-build --force-recreate playlist-admin'
 ```
 
 7. If the Synology host does not have the needed image locally and its on-box build hangs on package mirrors, build locally, transfer the tar, and load it remotely:
 
 ```bash
-docker build -f Dockerfile.playlist-sanitizer -t iptv-playlist-playlist-sanitizer:latest .
-docker save iptv-playlist-playlist-sanitizer:latest -o /tmp/iptv-playlist-playlist-sanitizer.tar
-scp -O /tmp/iptv-playlist-playlist-sanitizer.tar <user@host>:/tmp/
-ssh <user@host> 'printf "%s\n" "<sudo-password-if-needed>" | sudo -S -p "" /var/packages/ContainerManager/target/usr/bin/docker load -i /tmp/iptv-playlist-playlist-sanitizer.tar'
-ssh <user@host> 'cd /absolute/remote/repo && printf "%s\n" "<sudo-password-if-needed>" | sudo -S -p "" /var/packages/ContainerManager/target/usr/bin/docker compose up -d --no-build --force-recreate playlist-sanitizer'
+docker build -f Dockerfile.playlist-admin -t iptv-playlist-playlist-admin:latest .
+docker save iptv-playlist-playlist-admin:latest -o /tmp/iptv-playlist-playlist-admin.tar
+scp -O /tmp/iptv-playlist-playlist-admin.tar <user@host>:/tmp/
+ssh <user@host> 'printf "%s\n" "<sudo-password-if-needed>" | sudo -S -p "" /var/packages/ContainerManager/target/usr/bin/docker load -i /tmp/iptv-playlist-playlist-admin.tar'
+ssh <user@host> 'cd /absolute/remote/repo && printf "%s\n" "<sudo-password-if-needed>" | sudo -S -p "" /var/packages/ContainerManager/target/usr/bin/docker compose up -d --no-build --force-recreate playlist-admin'
 ```
 
 ## Verification
@@ -76,11 +76,11 @@ Verify the static server, generated playlist, and container status on the NAS:
 ```bash
 ssh <user@host> 'curl -I --max-time 5 http://127.0.0.1:8766/playlist_emby_clean.m3u8'
 ssh <user@host> 'cd /absolute/remote/repo && rg -c "^#EXTINF" original_playlist.m3u8 published/playlist_emby_clean.m3u8'
-ssh <user@host> 'printf "%s\n" "<sudo-password-if-needed>" | sudo -S -p "" /var/packages/ContainerManager/target/usr/bin/docker compose ps playlist-sanitizer'
-ssh <user@host> 'printf "%s\n" "<sudo-password-if-needed>" | sudo -S -p "" /var/packages/ContainerManager/target/usr/bin/docker logs --tail 80 playlist-sanitizer'
+ssh <user@host> 'printf "%s\n" "<sudo-password-if-needed>" | sudo -S -p "" /var/packages/ContainerManager/target/usr/bin/docker compose ps playlist-admin'
+ssh <user@host> 'printf "%s\n" "<sudo-password-if-needed>" | sudo -S -p "" /var/packages/ContainerManager/target/usr/bin/docker logs --tail 80 playlist-admin'
 ```
 
-Healthy startup in this repo should show the scheduler configuration and either an initial full run or a delayed next full-check schedule.
+Healthy startup in this repo should show the admin HTTP server and scheduled EPG validation loop.
 
 ## Failure Patterns
 

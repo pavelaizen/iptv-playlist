@@ -2,7 +2,7 @@ services:
   playlist-admin:
     build:
       context: .
-      dockerfile: Dockerfile.playlist-sanitizer
+      dockerfile: Dockerfile.playlist-admin
     container_name: playlist-admin
     working_dir: /app
     volumes:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.admin_m3u import import_playlist_entries, render_channel_entry, render_playlist
+from app.admin_m3u import import_playlist_entries, parse_m3u, render_channel_entry, render_playlist
 from app.admin_models import ChannelSnapshot
 
 
@@ -28,6 +28,25 @@ def test_import_playlist_entries_extracts_structured_fields(tmp_path: Path) -> N
             "tvg_logo": "logo1",
             "tvg_rec": "3",
         }
+    ]
+
+
+def test_parse_m3u_groups_metadata_with_following_stream_url(tmp_path: Path) -> None:
+    playlist = tmp_path / "playlist.m3u8"
+    playlist.write_text(
+        "#EXTM3U\n"
+        "#EXTINF:0,Channel One\n"
+        "#EXTGRP:News\n"
+        "http://provider.invalid/one\n"
+        "\n"
+        "#EXTINF:0,Channel Two\n"
+        "http://provider.invalid/two\n",
+        encoding="utf-8",
+    )
+
+    assert parse_m3u(playlist) == [
+        (["#EXTINF:0,Channel One", "#EXTGRP:News"], "http://provider.invalid/one"),
+        (["#EXTINF:0,Channel Two"], "http://provider.invalid/two"),
     ]
 
 

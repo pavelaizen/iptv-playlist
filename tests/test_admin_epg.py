@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import errno
 import gzip
+import os
 from pathlib import Path
 
+from app import admin_epg
 from app.admin_epg import sync_epg, sync_epg_from_cache
 
 
@@ -48,6 +51,53 @@ def test_sync_epg_returns_selected_channel_icons(tmp_path: Path, monkeypatch) ->
     )
 
     assert result.channel_icons == {1: "http://epg.example/icon.png"}
+
+
+def test_sync_epg_uses_output_directory_for_publish_candidate(
+    tmp_path: Path, monkeypatch
+) -> None:
+    output_path = tmp_path / "published" / "epg.xml"
+    work_dir = tmp_path / "state" / "epg"
+    payload = (
+        "<?xml version='1.0' encoding='UTF-8'?>"
+        "<tv>"
+        "<channel id='chan-one'><display-name>Channel One</display-name></channel>"
+        "<programme channel='chan-one' start='20260504000000 +0000' stop='20260504010000 +0000'>"
+        "<title>Show</title>"
+        "</programme>"
+        "</tv>"
+    ).encode("utf-8")
+
+    def fake_download_epg(source_url: str, destination: Path) -> None:
+        del source_url
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(gzip.compress(payload))
+
+    real_replace = os.replace
+
+    def reject_cross_directory_replace(source: str | Path, destination: str | Path) -> None:
+        if Path(source).parent != Path(destination).parent:
+            raise OSError(errno.EXDEV, "Invalid cross-device link", str(source))
+        real_replace(source, destination)
+
+    monkeypatch.setattr("app.admin_epg.download_epg_source", fake_download_epg)
+    monkeypatch.setattr(admin_epg.os, "replace", reject_cross_directory_replace)
+
+    result = sync_epg(
+        published_channels=[
+            {
+                "channel_id": 1,
+                "name": "Channel One",
+                "mappings": [{"source_key": "source-1", "channel_id": "chan-one"}],
+            }
+        ],
+        epg_sources=[{"id": 1, "source_url": "http://epg.example/source.xml.gz", "enabled": True}],
+        output_path=output_path,
+        work_dir=work_dir,
+    )
+
+    assert result.changed is True
+    assert output_path.exists()
 
 
 def test_sync_epg_accepts_plain_xml_epgpw_source(tmp_path: Path, monkeypatch) -> None:
@@ -161,6 +211,72 @@ def test_sync_epg_uses_cached_legacy_source_when_download_fails(
     assert result.matched_channels == 1
     assert result.programmes == 1
     assert result.channel_icons == {1: "http://epg.example/cached-icon.png"}
+
+
+def test_sync_epg_preserves_existing_output_when_no_channels_match(
+    tmp_path: Path, monkeypatch
+) -> None:
+    output_path = tmp_path / "published" / "epg.xml"
+    output_path.parent.mkdir()
+    previous_payload = "<tv><channel id='previous'/></tv>\n"
+    output_path.write_text(previous_payload, encoding="utf-8")
+    work_dir = tmp_path / "epg"
+
+    def failing_download_epg(source_url: str, destination: Path) -> None:
+        del source_url, destination
+        raise OSError("temporary download failure")
+
+    monkeypatch.setattr("app.admin_epg.download_epg_source", failing_download_epg)
+
+    result = sync_epg(
+        published_channels=[
+            {
+                "channel_id": 1,
+                "name": "Channel One",
+                "mappings": [
+                    {
+                        "source_key": "source-1",
+                        "channel_id": "chan-one",
+                    }
+                ],
+            }
+        ],
+        epg_sources=[{"id": 1, "source_url": "http://epg.example/source.xml.gz", "enabled": True}],
+        output_path=output_path,
+        work_dir=work_dir,
+    )
+
+    assert result.changed is False
+    assert result.matched_channels == 0
+    assert result.programmes == 0
+    assert output_path.read_text(encoding="utf-8") == previous_payload
+
+
+def test_sync_epg_from_cache_preserves_existing_output_when_no_cache_matches(
+    tmp_path: Path,
+) -> None:
+    output_path = tmp_path / "published" / "epg.xml"
+    output_path.parent.mkdir()
+    previous_payload = "<tv><channel id='previous'/></tv>\n"
+    output_path.write_text(previous_payload, encoding="utf-8")
+
+    result = sync_epg_from_cache(
+        published_channels=[
+            {
+                "channel_id": 1,
+                "name": "Channel One",
+                "mappings": [{"source_key": "source-1", "channel_id": "chan-one"}],
+            }
+        ],
+        epg_sources=[{"id": 1, "source_url": "http://epg.example/source.xml.gz", "enabled": True}],
+        output_path=output_path,
+        work_dir=tmp_path / "epg",
+    )
+
+    assert result.changed is False
+    assert result.matched_channels == 0
+    assert result.programmes == 0
+    assert output_path.read_text(encoding="utf-8") == previous_payload
 
 
 def test_sync_epg_skips_private_source_url_without_downloading(
