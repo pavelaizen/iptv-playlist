@@ -39,10 +39,9 @@ export NAS_PUBLIC_BASE_URL="http://<nas-host>:8766"
 ### 1. Prepare the NAS directory
 
 ```bash
-ssh "$NAS_SSH_TARGET"
-sudo mkdir -p "$NAS_DEPLOY_DIR/published"
-sudo mkdir -p "$NAS_DEPLOY_DIR/output"
-sudo chown -R "<nas-user>:<nas-group>" "$NAS_DEPLOY_DIR"
+ssh -t "$NAS_SSH_TARGET" \
+  "sudo mkdir -p '$NAS_DEPLOY_DIR/published' '$NAS_DEPLOY_DIR/output' && \
+   sudo chown -R '<nas-user>:<nas-group>' '$NAS_DEPLOY_DIR'"
 ```
 
 ### 2. Copy the subscription playlist
