@@ -70,6 +70,7 @@ def _atomic_write_text(path: Path, content: str) -> None:
     tmp_path = path.with_suffix(f"{path.suffix}.tmp")
     try:
         tmp_path.write_text(content, encoding="utf-8")
+        os.chmod(tmp_path, 0o644)
         os.replace(tmp_path, path)
     finally:
         tmp_path.unlink(missing_ok=True)

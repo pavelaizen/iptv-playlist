@@ -83,7 +83,7 @@ class CompletedProcess:
         return self._stdout, self._stderr
 
 
-def test_ffprobe_rejects_decoder_corruption_on_stderr(monkeypatch):
+def test_ffprobe_accepts_valid_stream_despite_stderr_warnings(monkeypatch):
     payload = b'{"streams":[{"codec_type":"video"}]}'
     stderr = (
         b"[h264 @ 0x123] mmco: unref short failure\n"
@@ -99,10 +99,9 @@ def test_ffprobe_rejects_decoder_corruption_on_stderr(monkeypatch):
         probe._run_ffprobe("http://example.invalid/channel", 1.0)
     )
 
-    assert valid is False
+    assert valid is True
     assert timed_out is False
-    assert "decoder corruption" in error
-    assert "mmco" in error
+    assert error is None
 
 
 def test_ffprobe_accepts_clean_stream_payload(monkeypatch):

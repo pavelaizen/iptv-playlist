@@ -3,7 +3,7 @@ services:
     image: nginx:alpine
     container_name: playlist-static
     restart: unless-stopped
-    ports:
-      - "8766:80"
+    network_mode: host
     volumes:
       - ./published:/usr/share/nginx/html:ro
+      - ./nginx/playlist-static.conf:/etc/nginx/conf.d/default.conf:ro

@@ -1,4 +1,5 @@
 from pathlib import Path
+import stat
 
 from app.publish import PublishGuardConfig, select_playlist_for_publish
 
@@ -17,6 +18,7 @@ def test_publish_guard_accepts_candidate(tmp_path: Path):
 
     assert decision.publish_candidate is True
     assert candidate.read_text(encoding="utf-8").startswith("#EXTM3U")
+    assert stat.S_IMODE(candidate.stat().st_mode) == 0o644
 
 
 def test_publish_guard_falls_back_and_writes_diagnostic(tmp_path: Path):
