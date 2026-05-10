@@ -189,6 +189,62 @@ def test_validate_all_rejects_overlapping_run(tmp_path: Path) -> None:
     assert result["status"] == "already_running"
 
 
+def test_background_job_runs_under_serialized_job_lock(tmp_path: Path, monkeypatch) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+        ),
+    )
+    calls: list[str] = []
+
+    def serialized(func):
+        calls.append("lock")
+        return func()
+
+    class ImmediateThread:
+        def __init__(self, *, target, daemon, name):
+            self.target = target
+            self.daemon = daemon
+            self.name = name
+
+        def start(self) -> None:
+            assert self.daemon is True
+            assert self.name == "playlist-admin-test-job"
+            self.target()
+
+    monkeypatch.setattr(service, "run_serialized_job", serialized)
+    monkeypatch.setattr("app.admin_service.threading.Thread", ImmediateThread)
+
+    result = service._start_job("test-job", lambda: calls.append("func") or {"status": "ok"})
+
+    job = service.get_job(result["job_id"])
+    assert calls == ["lock", "func"]
+    assert job["status"] == "ok"
+    assert job["result"] == {"status": "ok"}
+
+
+def test_serialized_job_uses_lock_file_beside_database(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "playlist.db")
+    store.initialize()
+    service = AdminService(
+        store,
+        AdminServiceSettings(
+            output_dir=tmp_path / "published",
+            diagnostics_dir=tmp_path / "diagnostics",
+        ),
+    )
+    lock_path = tmp_path / "playlist.job.lock"
+
+    result = service.run_serialized_job(lambda: {"lock_exists": lock_path.exists()})
+
+    assert result == {"lock_exists": True}
+    assert lock_path.exists()
+
+
 def test_validate_all_duplicate_urls_do_not_alias_probe_results(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -11,6 +11,10 @@ from app.admin_bootstrap import build_admin_context
 
 def run_nightly() -> dict[str, object]:
     context = build_admin_context()
+    return context.service.run_serialized_job(lambda: _run_nightly(context))
+
+
+def _run_nightly(context) -> dict[str, object]:
     reload_results = [
         context.service.reload_epg_source(source.id)
         for source in context.store.list_epg_sources()

@@ -17,6 +17,10 @@ def test_nightly_job_reloads_enabled_epg_sources_then_publishes_from_cache(monke
             ]
 
     class Service:
+        def run_serialized_job(self, func):
+            calls.append(("lock", None))
+            return func()
+
         def reload_epg_source(self, source_id: int) -> dict[str, object]:
             calls.append(("reload", source_id))
             return {"status": "ok", "source_id": source_id}
@@ -45,6 +49,7 @@ def test_nightly_job_reloads_enabled_epg_sources_then_publishes_from_cache(monke
     assert result["validation"]["status"] == "ok"
     assert result["publish"]["status"] == "ok"
     assert calls == [
+        ("lock", None),
         ("reload", 1),
         ("reload", 3),
         ("validate", "scheduled"),
@@ -60,6 +65,10 @@ def test_nightly_job_skips_publish_when_validation_does_not_finish_ok(monkeypatc
             return [SimpleNamespace(id=1, enabled=True)]
 
     class Service:
+        def run_serialized_job(self, func):
+            calls.append(("lock", None))
+            return func()
+
         def reload_epg_source(self, source_id: int) -> dict[str, object]:
             calls.append(("reload", source_id))
             return {"status": "ok", "source_id": source_id}
@@ -81,7 +90,7 @@ def test_nightly_job_skips_publish_when_validation_does_not_finish_ok(monkeypatc
 
     assert result["status"] == "validation_skipped_publish"
     assert result["publish"] == {"status": "skipped"}
-    assert calls == [("reload", 1), ("validate", "scheduled")]
+    assert calls == [("lock", None), ("reload", 1), ("validate", "scheduled")]
 
 
 def test_admin_jobs_main_runs_nightly_command(monkeypatch) -> None:
