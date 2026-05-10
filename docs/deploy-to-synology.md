@@ -2,16 +2,17 @@
 
 ## Architecture
 
-Two containers, both using `network_mode: host`:
+The public path is split from operational/admin work:
 
-- **`playlist-admin`** — Python app on port `8780`. Manages channels, validation, EPG sync, and publishing. Built from `Dockerfile.playlist-admin`.
-- **`playlist-static`** — Nginx on port `8766`. Serves static files from `published/` and reverse-proxies `/ui/` and `/api/` to the admin container at `127.0.0.1:8780`.
+- **`playlist-static`** — Nginx on port `8766`. Stays up all day and serves `published/playlist_emby_clean.m3u8` plus `published/epg.xml`.
+- **`playlist-nightly`** — one-shot Python job. Run by Synology Task Scheduler at `04:00`; reloads EPG source cache, validates streams, publishes playlist/EPG, then exits.
+- **`playlist-admin`** — optional Python dashboard/API on port `8780`. Start only when editing or inspecting state.
 
-Both containers share the host network directly. This avoids Synology's Docker bridge firewall which blocks inter-container traffic even on the same Docker network.
+All Compose services use `network_mode: host`. This avoids Synology's Docker bridge firewall which blocks inter-container traffic even on the same Docker network.
 
 ```
-Internet/LAN → :8766 (nginx) → /ui/*, /api/* → 127.0.0.1:8780 (admin)
-                                → /playlist_emby_clean.m3u8, /epg.xml → static files
+Internet/LAN → :8766 (nginx) → /playlist_emby_clean.m3u8, /epg.xml → static files
+                                → /ui/*, /api/* → 127.0.0.1:8780 when admin is running
 ```
 
 ## Prerequisites
@@ -68,9 +69,13 @@ tar czf - -C /path/to/local/iptv-playlist \
   nginx/playlist-static.conf \
 | ssh "$NAS_SSH_TARGET" "cd '$NAS_DEPLOY_DIR' && tar xzf -"
 
-# Restart containers:
+# Recreate the always-on public edge. Start/restart the admin profile only if
+# the dashboard is currently needed.
 ssh -t "$NAS_SSH_TARGET" \
-  "sudo '$NAS_DOCKER_BIN' restart playlist-admin playlist-static"
+  "cd '$NAS_DEPLOY_DIR' && sudo '$NAS_DOCKER_BIN' compose -f docker-compose.playlist.yml up -d --force-recreate playlist-static"
+
+ssh -t "$NAS_SSH_TARGET" \
+  "cd '$NAS_DEPLOY_DIR' && sudo '$NAS_DOCKER_BIN' compose --profile admin up -d --force-recreate playlist-admin"
 ```
 
 **Password prompt:** Synology `sudo` may require an interactive password prompt.
@@ -84,7 +89,7 @@ store passwords in scripts, docs, commits, or memory.
 ```bash
 ssh -t "$NAS_SSH_TARGET" \
   "cd '$NAS_DEPLOY_DIR' && \
-   sudo '$NAS_DOCKER_BIN' compose up -d --force-recreate playlist-admin && \
+   sudo '$NAS_DOCKER_BIN' compose --profile admin --profile jobs build playlist-admin playlist-nightly && \
    sudo '$NAS_DOCKER_BIN' compose -f docker-compose.playlist.yml up -d --force-recreate playlist-static"
 ```
 
@@ -100,16 +105,47 @@ Synology's Docker bridge network has a firewall that **blocks container-to-conta
 - `nc -z <container_ip> <port>`: connection refused
 - nginx proxy to `playlist-admin:8780`: 504 Gateway Timeout
 
-Using `network_mode: host` on both containers eliminates this problem. The public
-edge binds on the LAN port and proxies to the admin runtime on loopback:
+Using `network_mode: host` on these services eliminates this problem. The public
+edge binds on the LAN port and proxies to the admin runtime on loopback when the
+dashboard is running:
 
 - `playlist-admin` binds to `127.0.0.1:8780`
 - `playlist-static` (nginx) binds to `8766`
 
 Retired pre-admin worker containers are no longer part of the current compose
 runtime. If they still exist from an older deployment, treat them as orphans and
-stop/remove them after confirming `playlist-admin` and `playlist-static` are
-healthy.
+stop/remove them after confirming `playlist-static` serves files and
+`playlist-nightly` can run successfully.
+
+## Nightly Task
+
+Create a Synology Task Scheduler entry for `04:00` and set the task owner to
+`root`. On this NAS the Docker socket is `root:root 660`, so a task owned by a
+normal admin user can start on schedule but fail before `playlist-nightly` runs
+with `permission denied while trying to connect to the Docker daemon socket`.
+
+Use this command body:
+
+```bash
+NAS_DEPLOY_DIR="/path/to/remote/iptv-playlist"
+NAS_DOCKER_BIN="/usr/local/bin/docker"
+cd "$NAS_DEPLOY_DIR" && "$NAS_DOCKER_BIN" compose --profile jobs run --rm playlist-nightly >> "$NAS_DEPLOY_DIR/output/nightly-task.log" 2>&1
+```
+
+This job initializes the same SQLite/service context as the dashboard, reloads
+enabled EPG source caches, validates enabled streams, publishes from the cached
+EPG data, and exits. The dashboard container does not need to be running for the
+nightly job or for Emby playback.
+
+Verify the task after creating or editing it:
+
+```bash
+sudo /usr/syno/bin/synoschedtask --get | sed -n '/IPTV playlist nightly/,+18p'
+tail -n 80 "$NAS_DEPLOY_DIR/output/nightly-task.log"
+```
+
+The task should show `Owner: [root]`, `Type: [daily]`, and `Run time:
+[4]:[0]`.
 
 ### DNS inside containers
 
@@ -148,7 +184,7 @@ Containers run as root. Written files (playlist, EPG) get mode `600` by default.
 
 ```bash
 ssh -t "$NAS_SSH_TARGET" \
-  "sudo '$NAS_DOCKER_BIN' exec playlist-admin chmod 644 /data/published/epg.xml /data/published/playlist_emby_clean.m3u8"
+  "sudo chmod 644 '$NAS_DEPLOY_DIR/published/epg.xml' '$NAS_DEPLOY_DIR/published/playlist_emby_clean.m3u8'"
 ```
 
 ## Volume Mapping
@@ -156,7 +192,7 @@ ssh -t "$NAS_SSH_TARGET" \
 ```
 Host path                              Container path           Mode
 ./original_playlist.m3u8              /data/input/playlist.m3u  ro
-./published/                         /data/published            rw
+./published/                         /data/output               rw
 ./output/                            /data/state                rw
 ./app/                               /app/app                   ro
 ```
@@ -174,13 +210,13 @@ curl -I "$NAS_PUBLIC_BASE_URL/playlist_emby_clean.m3u8"
 # Check EPG is served
 curl -I "$NAS_PUBLIC_BASE_URL/epg.xml"
 
-# Check admin API
+# Check admin API when playlist-admin is running
 curl "$NAS_PUBLIC_BASE_URL/api/channels" | python3 -m json.tool | head -20
 
-# Check admin UI (returns HTML)
+# Check admin UI when playlist-admin is running
 curl -s "$NAS_PUBLIC_BASE_URL/ui/channels" | head -5
 
-# Direct admin API (bypasses nginx)
+# Direct admin API when playlist-admin is running (bypasses nginx)
 ssh "$NAS_SSH_TARGET" \
   'curl -s http://localhost:8780/api/channels | python3 -m json.tool | head -20'
 
@@ -188,23 +224,28 @@ ssh "$NAS_SSH_TARGET" \
 ssh -t "$NAS_SSH_TARGET" \
   "sudo '$NAS_DOCKER_BIN' ps --filter name=playlist"
 
-# Check container logs
+# Run the nightly job manually
+ssh -t "$NAS_SSH_TARGET" \
+  "cd '$NAS_DEPLOY_DIR' && sudo '$NAS_DOCKER_BIN' compose --profile jobs run --rm playlist-nightly"
+
+# Check dashboard logs when playlist-admin is running
 ssh -t "$NAS_SSH_TARGET" \
   "sudo '$NAS_DOCKER_BIN' logs playlist-admin --tail=30"
 
-# Run Python inside the container
+# Run Python inside the dashboard container when playlist-admin is running
 ssh -t "$NAS_SSH_TARGET" \
   "sudo '$NAS_DOCKER_BIN' exec playlist-admin python3 -c 'from pathlib import Path; from app.admin_store import AdminStore; print(AdminStore(Path(\"/data/state/admin/playlist.db\")).channel_count())'"
 ```
 
 ## Common Issues
 
-### nginx 504 Gateway Timeout on `/api/channels/validate`
+### nginx 504 Gateway Timeout on admin routes
 
-Full validation takes 3+ minutes (ffprobe probes all channels). nginx's `proxy_read_timeout` is 180s. Options:
+Full validation runs as a background job, but long status polling or EPG reloads
+can still exceed nginx's `proxy_read_timeout` if the NAS is slow. Options:
 
 1. Increase `proxy_read_timeout` in `nginx/playlist-static.conf`
-2. Make validation a background job (not yet implemented)
+2. Run the one-shot nightly job from SSH instead of keeping the browser open
 3. Validate individual channels via `POST /api/channels/{id}/validate` instead
 
 ### Container can't reach provider URLs
@@ -256,12 +297,15 @@ set -euo pipefail
 tar czf - app/ docker-compose.yml docker-compose.playlist.yml nginx/ \
   | ssh "${NAS_SSH_TARGET}" "cd '${NAS_DEPLOY_DIR}' && tar xzf -"
 
-# Restart containers (code-only change)
+# Recreate public edge; start the dashboard profile only when needed.
 ssh -t "${NAS_SSH_TARGET}" \
-  "sudo '${NAS_DOCKER_BIN}' restart playlist-admin playlist-static"
+  "cd '${NAS_DEPLOY_DIR}' && sudo '${NAS_DOCKER_BIN}' compose -f docker-compose.playlist.yml up -d --force-recreate playlist-static"
 
-# For compose file changes, use instead:
-# ssh -t "${NAS_SSH_TARGET}" "cd '${NAS_DEPLOY_DIR}' && sudo '${NAS_DOCKER_BIN}' compose up -d --force-recreate playlist-admin && sudo '${NAS_DOCKER_BIN}' compose -f docker-compose.playlist.yml up -d --force-recreate playlist-static"
+# Optional dashboard start:
+# ssh -t "${NAS_SSH_TARGET}" "cd '${NAS_DEPLOY_DIR}' && sudo '${NAS_DOCKER_BIN}' compose --profile admin up -d --force-recreate playlist-admin"
+
+# Manual nightly run:
+# ssh -t "${NAS_SSH_TARGET}" "cd '${NAS_DEPLOY_DIR}' && sudo '${NAS_DOCKER_BIN}' compose --profile jobs run --rm playlist-nightly"
 ```
 
 Set the `NAS_*` variables in the current shell before running.
@@ -270,5 +314,5 @@ Set the `NAS_*` variables in the current shell before running.
 
 | Port | Service | Protocol | Notes |
 |------|---------|----------|-------|
-| 8766 | playlist-static (nginx) | HTTP | Public-facing; serves playlist, EPG, admin UI |
-| 8780 | playlist-admin (Python) | HTTP | Internal; admin API + UI (proxied through nginx) |
+| 8766 | playlist-static (nginx) | HTTP | Public-facing; serves playlist and EPG all day |
+| 8780 | playlist-admin (Python) | HTTP | Optional admin API + UI, proxied through nginx when running |

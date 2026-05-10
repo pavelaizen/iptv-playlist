@@ -16,19 +16,29 @@ Public endpoints stay stable:
 
 ## Admin runtime
 
-The repository now uses a DB-backed control plane service:
+The repository uses a DB-backed control plane. Keep the public static container
+running all day; start the admin dashboard only when editing or inspecting state:
 
 ```bash
-docker compose up -d --build playlist-admin
+docker compose --profile admin up -d --build playlist-admin
 ```
 
 `playlist-admin` owns:
 
 - one-time migration from `original_playlist.m3u8` into SQLite
-- channel validation and guarded playlist publishing
+- manual channel validation and guarded playlist publishing
 - extended per-stream `ffmpeg` stability tests for video/audio decode checks
-- EPG regeneration with per-channel explicit mappings plus source fallback
 - `/api/*` and `/ui/*` admin routes (proxied by `playlist-static`)
+
+Nightly automation is a one-shot command, intended for Synology Task Scheduler
+or cron at `04:00`:
+
+```bash
+docker compose --profile jobs run --rm playlist-nightly
+```
+
+`playlist-nightly` reloads enabled EPG sources into the cache, validates streams,
+publishes the clean playlist, rebuilds `epg.xml` from cached EPG data, then exits.
 
 EPG sources can be static XML/XML.GZ feeds or `epg.pw` per-channel URLs. For
 `epg.pw`, paste either a `/last/<channel>.html` page URL or an `/api/epg.xml`
@@ -63,9 +73,10 @@ python -m compileall -q app tests
 Container checks:
 
 ```bash
-docker compose up -d --build playlist-admin
+docker compose --profile admin up -d --build playlist-admin
+docker compose --profile jobs run --rm playlist-nightly
 docker compose -f docker-compose.playlist.yml up -d playlist-static
-docker compose ps playlist-admin
+docker compose --profile admin ps playlist-admin
 curl -I http://127.0.0.1:8766/playlist_emby_clean.m3u8
 curl -I http://127.0.0.1:8766/epg.xml
 curl -I http://127.0.0.1:8766/ui/channels

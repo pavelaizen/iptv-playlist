@@ -1,48 +1,61 @@
+name: iptv-playlist-admin
+
+x-playlist-admin-base: &playlist-admin-base
+  build:
+    context: .
+    dockerfile: Dockerfile.playlist-admin
+  image: iptv-playlist-playlist-admin
+  working_dir: /app
+  volumes:
+    - ./original_playlist.m3u8:/data/input/playlist.m3u:ro
+    - ./published:/data/output:rw
+    - ./output:/data/state:rw
+    - ./app:/app/app:ro
+  network_mode: host
+  environment:
+    TZ: ${TZ:-Asia/Jerusalem}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+    # Admin runtime settings
+    RAW_PLAYLIST_PATH: ${RAW_PLAYLIST_PATH:-/data/input/playlist.m3u}
+    OUTPUT_DIR: ${OUTPUT_DIR:-/data/output}
+    DIAGNOSTICS_DIR: ${DIAGNOSTICS_DIR:-/data/state/diagnostics}
+    ADMIN_DB_PATH: ${ADMIN_DB_PATH:-/data/state/admin/playlist.db}
+    ADMIN_BIND_HOST: ${ADMIN_BIND_HOST:-127.0.0.1}
+    ADMIN_BIND_PORT: ${ADMIN_BIND_PORT:-8780}
+    EPG_WORK_DIR: ${EPG_WORK_DIR:-/data/state/epg}
+
+    # Probe settings
+    PROBE_TIMEOUT_SECONDS: ${PROBE_TIMEOUT_SECONDS:-15}
+    PROBE_CONCURRENCY: ${PROBE_CONCURRENCY:-4}
+    PROBE_RETRIES: ${PROBE_RETRIES:-1}
+    PROBE_RETRY_DELAY_SECONDS: ${PROBE_RETRY_DELAY_SECONDS:-1}
+    STABILITY_TEST_SECONDS: ${STABILITY_TEST_SECONDS:-60}
+    STABILITY_TEST_TIMEOUT_PADDING_SECONDS: ${STABILITY_TEST_TIMEOUT_PADDING_SECONDS:-40}
+
+    # EPG source defaults
+    EPG_SOURCE_URL: ${EPG_SOURCE_URL:-http://epg.one/epg2.xml.gz}
+    EPG_ISRAEL_PRIMARY_URL: ${EPG_ISRAEL_PRIMARY_URL:-https://iptvx.one/EPG}
+    EPG_ISRAEL_FALLBACK_URL: ${EPG_ISRAEL_FALLBACK_URL:-https://iptv-epg.org/files/epg-il.xml.gz}
+    EPGPW_TIMEZONE: ${EPGPW_TIMEZONE:-Asia/Jerusalem}
+
+    # Emby settings
+    EMBY_BASE_URL: ${EMBY_BASE_URL:-}
+    EMBY_API_KEY: ${EMBY_API_KEY:-}
+    EMBY_LIVETV_TUNER_ID: ${EMBY_LIVETV_TUNER_ID:-}
+  init: true
+  stop_grace_period: 45s
+
 services:
   playlist-admin:
-    build:
-      context: .
-      dockerfile: Dockerfile.playlist-admin
+    <<: *playlist-admin-base
+    profiles: ["admin"]
     container_name: playlist-admin
-    working_dir: /app
-    volumes:
-      - ./original_playlist.m3u8:/data/input/playlist.m3u:ro
-      - ./published:/data/output:rw
-      - ./output:/data/state:rw
-      - ./app:/app/app:ro
-    network_mode: host
-    environment:
-      TZ: ${TZ:-Asia/Jerusalem}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-
-      # Admin runtime settings
-      RAW_PLAYLIST_PATH: ${RAW_PLAYLIST_PATH:-/data/input/playlist.m3u}
-      OUTPUT_DIR: ${OUTPUT_DIR:-/data/output}
-      DIAGNOSTICS_DIR: ${DIAGNOSTICS_DIR:-/data/state/diagnostics}
-      ADMIN_DB_PATH: ${ADMIN_DB_PATH:-/data/state/admin/playlist.db}
-      ADMIN_BIND_HOST: ${ADMIN_BIND_HOST:-127.0.0.1}
-      ADMIN_BIND_PORT: ${ADMIN_BIND_PORT:-8780}
-      EPG_RUN_TIME: ${EPG_RUN_TIME:-04:00}
-      EPG_WORK_DIR: ${EPG_WORK_DIR:-/data/state/epg}
-
-      # Probe settings
-      PROBE_TIMEOUT_SECONDS: ${PROBE_TIMEOUT_SECONDS:-15}
-      PROBE_CONCURRENCY: ${PROBE_CONCURRENCY:-4}
-      PROBE_RETRIES: ${PROBE_RETRIES:-1}
-      PROBE_RETRY_DELAY_SECONDS: ${PROBE_RETRY_DELAY_SECONDS:-1}
-      STABILITY_TEST_SECONDS: ${STABILITY_TEST_SECONDS:-60}
-      STABILITY_TEST_TIMEOUT_PADDING_SECONDS: ${STABILITY_TEST_TIMEOUT_PADDING_SECONDS:-40}
-
-      # EPG source defaults
-      EPG_SOURCE_URL: ${EPG_SOURCE_URL:-http://epg.one/epg2.xml.gz}
-      EPG_ISRAEL_PRIMARY_URL: ${EPG_ISRAEL_PRIMARY_URL:-https://iptvx.one/EPG}
-      EPG_ISRAEL_FALLBACK_URL: ${EPG_ISRAEL_FALLBACK_URL:-https://iptv-epg.org/files/epg-il.xml.gz}
-      EPGPW_TIMEZONE: ${EPGPW_TIMEZONE:-Asia/Jerusalem}
-
-      # Emby settings
-      EMBY_BASE_URL: ${EMBY_BASE_URL:-}
-      EMBY_API_KEY: ${EMBY_API_KEY:-}
-      EMBY_LIVETV_TUNER_ID: ${EMBY_LIVETV_TUNER_ID:-}
-
     command: ["python", "-m", "app.admin_runtime"]
     restart: unless-stopped
+
+  playlist-nightly:
+    <<: *playlist-admin-base
+    profiles: ["jobs"]
+    command: ["python", "-m", "app.admin_jobs", "nightly"]
+    restart: "no"

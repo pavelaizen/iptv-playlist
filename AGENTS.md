@@ -7,17 +7,20 @@ Guidance for future Codex sessions in this repository.
 This repo maintains a DB-backed IPTV control plane for Emby:
 
 - `playlist-admin` manages channels and EPG source configuration in SQLite.
+- `playlist-nightly` runs the 04:00 one-shot EPG reload, validation, and publish flow.
 - Channel validation uses `ffprobe` (`app/probe.py`).
 - Playlist output is rendered from last validated channel snapshots and guarded by `app.publish`.
 - EPG output is regenerated via `app.epg` and `app.admin_epg`.
 - Emby refresh is best-effort and only runs after changed successful publish paths.
-- `playlist-static` serves public artifacts and proxies admin UI/API on the same port.
+- `playlist-static` serves public artifacts all day and proxies admin UI/API only when `playlist-admin` is running.
 
 Do not paste provider URLs, tokens, passwords, or API keys into commits/docs/chat unless the user explicitly asks.
 
 ## Repository Map
 
-- `app/admin_runtime.py` - main runtime entrypoint, boot migration, scheduler, HTTP server startup.
+- `app/admin_bootstrap.py` - shared env parsing, DB bootstrap, default EPG seed, service construction.
+- `app/admin_runtime.py` - optional admin HTTP server entrypoint.
+- `app/admin_jobs.py` - one-shot operational jobs such as `nightly`.
 - `app/admin_store.py` - SQLite schema, migration import, channel/EPG/run persistence APIs.
 - `app/admin_service.py` - validation orchestration, guard publish, EPG sync integration, job lock.
 - `app/admin_web.py` - admin HTTP routes (`/api/*`, `/ui/*`) and HTML rendering.
@@ -30,7 +33,7 @@ Do not paste provider URLs, tokens, passwords, or API keys into commits/docs/cha
 - `app/stream_stability.py` - longer `ffmpeg` decode checks for stream stability.
 - `app/publish.py` - publish guard behavior for playlist content.
 - `app/emby_client.py` - optional Emby refresh client.
-- `docker-compose.yml` - `playlist-admin` service.
+- `docker-compose.yml` - shared admin image config, optional `playlist-admin`, one-shot `playlist-nightly`.
 - `docker-compose.playlist.yml` - `playlist-static` nginx service on `:8766`.
 - `nginx/playlist-static.conf` - static + reverse proxy routes (`/ui`, `/api`).
 - `publish_emby_playlist.sh` - atomic raw playlist publisher.
@@ -42,25 +45,30 @@ Do not paste provider URLs, tokens, passwords, or API keys into commits/docs/cha
 1. Initialize SQLite schema.
 2. One-time bootstrap import from `RAW_PLAYLIST_PATH`; fallback to published playlist if needed.
 3. Seed default EPG source URLs when DB has none.
-4. Start scheduler thread for daily `EPG_RUN_TIME` validation.
-5. Serve admin UI/API HTTP server.
+4. Serve admin UI/API HTTP server until stopped.
 
-Validation (`AdminService.validate_all`):
+`python -m app.admin_jobs nightly`:
+
+1. Initialize the same DB/service context as the admin UI.
+2. Reload enabled EPG sources into the cache, preserving existing cache on source failure.
+3. Run `AdminService.validate_all("scheduled")`.
+4. If validation succeeds, publish playlist and EPG from the cached EPG data.
+5. Exit with status `0` for `ok`; non-`ok` job results exit non-zero.
+
+Validation (`AdminService.validate_all`) only updates validation state and live snapshots:
 
 1. Acquire non-blocking job lock.
 2. Probe enabled channel drafts.
 3. Promote valid drafts into live snapshots; mark invalid drafts accordingly.
-4. Render candidate playlist from enabled live snapshots.
-5. Apply publish guard.
-6. Regenerate `epg.xml` with explicit mapping-first and fallback source strategy.
-7. Refresh Emby only when publish path changed and succeeded.
-8. Persist run summary.
+4. Persist run summary.
+
+Publishing (`publish_from_cache` / `rebuild_all_public_outputs`) renders enabled live snapshots, applies the publish guard, regenerates `epg.xml`, and refreshes Emby only when the playlist changed successfully.
 
 ## Data Files
 
 - Source input: `original_playlist.m3u8` (subscription material, do not commit real data).
 - Public outputs: `published/playlist_emby_clean.m3u8`, `published/epg.xml` (generated).
-- Private state: `output/` (SQLite DB, scheduler/EPG work files, diagnostics).
+- Private state: `output/` (SQLite DB, EPG work files, diagnostics).
 
 ## Environment Variables
 
@@ -72,7 +80,6 @@ Primary runtime (`app.admin_runtime`):
 - `ADMIN_DB_PATH` default `/data/state/admin/playlist.db`
 - `ADMIN_BIND_HOST` default `0.0.0.0`
 - `ADMIN_BIND_PORT` default `8780`
-- `EPG_RUN_TIME` default `04:00`
 - `EPG_WORK_DIR` default `/data/state/epg`
 - `EPGPW_TIMEZONE` default `Asia/Jerusalem`
 
@@ -115,7 +122,9 @@ Emby:
 See `docs/deploy-to-synology.md` for full Synology deployment guide including networking, DNS, and troubleshooting.
 
 Key points:
-- Both containers use `network_mode: host` (Synology Docker bridge firewall blocks inter-container traffic).
+- Compose services use `network_mode: host` (Synology Docker bridge firewall blocks inter-container traffic).
+- `playlist-static` should stay up all day; `playlist-admin` is profile-gated and only needed for dashboard/API sessions.
+- Schedule `playlist-nightly` externally at `04:00`; do not reintroduce an in-process scheduler thread.
 - Nginx on `:8766` proxies `/ui/` and `/api/` to `127.0.0.1:8780`.
 - `extra_hosts` and `dns` directives are incompatible with `network_mode: host`. Use Synology `/etc/hosts` instead.
 - `scp` subsystem is often broken on Synology SSH. Use `tar czf - | ssh ... 'tar xzf -'` or `base64` pipe.
@@ -128,9 +137,10 @@ Key points:
 ```bash
 python -m pytest -q tests
 python -m compileall -q app tests
-docker compose up -d --build playlist-admin
+docker compose --profile admin up -d --build playlist-admin
+docker compose --profile jobs run --rm playlist-nightly
 docker compose -f docker-compose.playlist.yml up -d playlist-static
-docker compose ps playlist-admin
+docker compose --profile admin ps playlist-admin
 curl -I "$NAS_PUBLIC_BASE_URL/playlist_emby_clean.m3u8"
 curl -I "$NAS_PUBLIC_BASE_URL/epg.xml"
 curl -I "$NAS_PUBLIC_BASE_URL/ui/channels"

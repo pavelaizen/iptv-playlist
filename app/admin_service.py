@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+import fcntl
 import gzip
 import threading
 import uuid
@@ -8,6 +11,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TypeVar
 
 from app.admin_epg import sync_epg, sync_epg_from_cache, collect_channel_epg_icons
 from app.admin_events import AdminEventBus
@@ -19,6 +23,19 @@ from app.epg_sources import download_epg_source, search_epgpw_channels, validate
 from app.probe import ProbeSettings, ProbeTarget, probe_channels
 from app.publish import PublishGuardConfig, select_playlist_for_publish
 from app.stream_stability import run_stream_stability_test
+
+T = TypeVar("T")
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True)
@@ -56,6 +73,12 @@ class AdminService:
         self._publish_lock = threading.Lock()
         self._jobs_lock = threading.Lock()
         self._jobs: dict[str, AdminJob] = {}
+
+    def run_serialized_job(self, func: Callable[[], T]) -> T:
+        # Dashboard jobs and the one-shot nightly process do not share memory.
+        # Keep write-heavy validation/publish work serialized beside SQLite.
+        with _exclusive_file_lock(self.store.db_path.with_suffix(".job.lock")):
+            return func()
 
     def publish_channels_changed(self, reason: str, **payload: object) -> None:
         event_payload: dict[str, object] = {"reason": reason}
@@ -583,7 +606,7 @@ class AdminService:
             with self._jobs_lock:
                 job.status = "running"
             try:
-                result = func()
+                result = self.run_serialized_job(func)
             except Exception as exc:  # noqa: BLE001 - persist concise job failure
                 with self._jobs_lock:
                     job.status = "error"
