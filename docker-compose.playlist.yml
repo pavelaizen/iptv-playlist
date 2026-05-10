@@ -1,8 +1,11 @@
+name: iptv-playlist-static
+
 services:
   playlist-static:
     image: nginx:alpine
     container_name: playlist-static
-    restart: unless-stopped
+    restart: always
+    init: true
     network_mode: host
     volumes:
       - ./published:/usr/share/nginx/html:ro

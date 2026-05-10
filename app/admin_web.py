@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import queue
+import signal
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from html import escape
 from http import HTTPStatus
@@ -1192,9 +1194,35 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             return
 
 
+class AdminHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+
+def install_shutdown_signal_handlers(httpd: ThreadingHTTPServer):
+    previous_handlers = {}
+
+    def request_shutdown(signum, frame) -> None:
+        del signum, frame
+        threading.Thread(target=httpd.shutdown, daemon=True).start()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        previous_handlers[sig] = signal.signal(sig, request_shutdown)
+
+    def restore_handlers() -> None:
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
+
+    return restore_handlers
+
+
 def serve(*, bind_host: str, bind_port: int, store, service, event_bus: AdminEventBus | None = None) -> None:
     AdminRequestHandler.store = store
     AdminRequestHandler.service = service
     AdminRequestHandler.event_bus = event_bus or getattr(service, "event_bus", None)
-    httpd = ThreadingHTTPServer((bind_host, bind_port), AdminRequestHandler)
-    httpd.serve_forever()
+    httpd = AdminHTTPServer((bind_host, bind_port), AdminRequestHandler)
+    restore_handlers = install_shutdown_signal_handlers(httpd)
+    try:
+        httpd.serve_forever()
+    finally:
+        restore_handlers()
+        httpd.server_close()
