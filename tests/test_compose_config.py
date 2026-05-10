@@ -7,9 +7,15 @@ def test_playlist_admin_runs_http_service_and_owns_private_state():
     nginx_conf = Path("nginx/playlist-static.conf").read_text(encoding="utf-8")
     publish_script = Path("publish_emby_playlist.sh").read_text(encoding="utf-8")
 
+    assert "name: iptv-playlist-admin" in compose
     assert "playlist-admin:" in compose
+    assert "playlist-nightly:" in compose
+    assert "x-playlist-admin-base:" in compose
+    assert 'profiles: ["admin"]' in compose
+    assert 'profiles: ["jobs"]' in compose
     assert "container_name: playlist-admin" in compose
     assert "dockerfile: Dockerfile.playlist-admin" in compose
+    assert "image: iptv-playlist-playlist-admin" in compose
     assert "LOG_LEVEL: ${LOG_LEVEL:-INFO}" in compose
     assert "TZ: ${TZ:-Asia/Jerusalem}" in compose
     assert "./original_playlist.m3u8:/data/input/playlist.m3u:ro" in compose
@@ -19,7 +25,6 @@ def test_playlist_admin_runs_http_service_and_owns_private_state():
     assert "ADMIN_DB_PATH: ${ADMIN_DB_PATH:-/data/state/admin/playlist.db}" in compose
     assert "ADMIN_BIND_HOST: ${ADMIN_BIND_HOST:-127.0.0.1}" in compose
     assert "ADMIN_BIND_PORT: ${ADMIN_BIND_PORT:-8780}" in compose
-    assert "EPG_RUN_TIME: ${EPG_RUN_TIME:-04:00}" in compose
     assert "EPG_SOURCE_URL: ${EPG_SOURCE_URL:-http://epg.one/epg2.xml.gz}" in compose
     assert "EPG_ISRAEL_PRIMARY_URL: ${EPG_ISRAEL_PRIMARY_URL:-https://iptvx.one/EPG}" in compose
     assert "EPG_ISRAEL_FALLBACK_URL: ${EPG_ISRAEL_FALLBACK_URL:-https://iptv-epg.org/files/epg-il.xml.gz}" in compose
@@ -28,10 +33,20 @@ def test_playlist_admin_runs_http_service_and_owns_private_state():
     assert "STABILITY_TEST_SECONDS: ${STABILITY_TEST_SECONDS:-60}" in compose
     assert "STABILITY_TEST_TIMEOUT_PADDING_SECONDS: ${STABILITY_TEST_TIMEOUT_PADDING_SECONDS:-40}" in compose
     assert 'command: ["python", "-m", "app.admin_runtime"]' in compose
+    assert 'command: ["python", "-m", "app.admin_jobs", "nightly"]' in compose
+    assert "EPG_RUN_TIME:" not in compose
+    assert "restart: unless-stopped" in compose
+    assert 'restart: "no"' in compose
+    assert "init: true" in compose
+    assert "stop_grace_period: 45s" in compose
 
+    assert "name: iptv-playlist-static" in static_compose
     assert "./published:/usr/share/nginx/html:ro" in static_compose
     assert "./nginx/playlist-static.conf:/etc/nginx/conf.d/default.conf:ro" in static_compose
     assert "network_mode: host" in static_compose
+    assert "restart: always" in static_compose
+    assert "restart: unless-stopped" not in static_compose
+    assert "init: true" in static_compose
     assert 'SRC_FILE="${SRC_FILE:-original_playlist.m3u8}"' in publish_script
 
     assert "location /ui/" in nginx_conf

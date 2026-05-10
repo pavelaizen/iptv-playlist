@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import gzip
 import json
+import signal
 import sqlite3
 from pathlib import Path
 
 from app.admin_service import AdminService, AdminServiceSettings
 from app.admin_store import AdminStore
+from app import admin_web
 from app.admin_web import build_test_server
 
 
@@ -455,6 +457,49 @@ def test_events_endpoint_exposes_sse_content_type(tmp_path: Path) -> None:
     assert status == 200
     assert headers["Content-Type"] == "text/event-stream"
     assert body.startswith(": connected")
+
+
+def test_admin_http_server_uses_daemon_threads_for_shutdown() -> None:
+    assert admin_web.AdminHTTPServer.daemon_threads is True
+
+
+def test_shutdown_signal_handler_stops_http_server(monkeypatch) -> None:
+    registered_handlers = {}
+    restored_handlers = {}
+
+    def capture_signal(sig, handler):
+        if sig in registered_handlers:
+            restored_handlers[sig] = handler
+        else:
+            registered_handlers[sig] = handler
+        return f"previous-{sig}"
+
+    class ImmediateThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+            self.daemon = daemon
+
+        def start(self) -> None:
+            assert self.daemon is True
+            self.target()
+
+    class Server:
+        shutdown_called = False
+
+        def shutdown(self) -> None:
+            self.shutdown_called = True
+
+    monkeypatch.setattr(admin_web.signal, "signal", capture_signal)
+    monkeypatch.setattr(admin_web.threading, "Thread", ImmediateThread)
+    server = Server()
+
+    restore_handlers = admin_web.install_shutdown_signal_handlers(server)
+    registered_handlers[signal.SIGTERM](signal.SIGTERM, None)
+    restore_handlers()
+
+    assert server.shutdown_called is True
+    assert restored_handlers[signal.SIGTERM] == f"previous-{signal.SIGTERM}"
+    assert restored_handlers[signal.SIGINT] == f"previous-{signal.SIGINT}"
 
 
 def test_channel_editor_exposes_extended_stream_test(tmp_path: Path) -> None:
